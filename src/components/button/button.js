@@ -1,20 +1,20 @@
-import { PolymerElement, html } from '@polymer/polymer/polymer-element.js';
+import { PolymerElement, html } from '@polymer/polymer/polymer-element.js'
 class Button extends PolymerElement {
-    static get name() {
-        return 'g-button';
-    }
-    static get properties() {
-        return {
-          text: {
-            type: String,
-            value: '按钮'
-          },
-          type:{
-              type:String,
-              value:'default'
-          }
-        }
+  static get name() {
+    return 'g-button'
+  }
+  static get properties() {
+    return {
+      text: {
+        type: String,
+        value: '按钮'
+      },
+      type: {
+        type: String,
+        value: 'default'
       }
+    }
+  }
     // connectedCallback() {
     //     this.initShadowDom();
     // }
@@ -25,8 +25,8 @@ class Button extends PolymerElement {
     //     shadowRoot.innerHTML = this.template;
     // }
 
-    static get template() {
-        return html`
+  static get template() {
+    return html`
           <style>
             .btn {
               width: 100%;
@@ -57,7 +57,7 @@ class Button extends PolymerElement {
           <button class="btn g-button">
             <span>[[text]]</span>
           </button>
-        `;
-      }
+        `
   }
-  export default Button
+  }
+export default Button

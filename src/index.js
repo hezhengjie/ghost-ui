@@ -1,6 +1,6 @@
 import '@webcomponents/shadydom'
 import '@webcomponents/custom-elements'
-import '@webcomponents/custom-elements/src/native-shim';
+import '@webcomponents/custom-elements/src/native-shim'
 import {
   // basic
   Button
@@ -23,7 +23,6 @@ components.forEach((Component) => {
     firstUpperCase: true
   })
   Ghost[name] = Component
-
 })
 
 export default Ghost
