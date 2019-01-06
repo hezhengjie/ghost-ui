@@ -1,0 +1,21 @@
+{
+  "zh-CN": {
+    "overview": {
+      "name": "概览",
+      "subList": {
+        "introduction": "介绍"
+      }
+    },
+    "components": {
+      "name": "组件",
+      "subList": {
+        "basic": {
+          "name": "基础",
+          "subList": {
+            "button": "Button"
+          }
+        }
+      }
+    }
+  }
+}
