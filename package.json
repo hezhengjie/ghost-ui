@@ -13,6 +13,7 @@
     "doc:build": "vuepress build docs",
     "demo:build": "node build/example/build.js",
     "doc-demo:build": "npm run doc:build && npm run demo:build",
+    "doc:publish":"bash ./build/release/docs.sh",
     "release": "bash ./build/release/publish.sh",
     "lint": "eslint --ext .js,.vue src",
     "lint-fix": "eslint --quiet --ext .js,.vue src -f stylish --color --fix"
@@ -20,7 +21,8 @@
   "husky": {
     "hooks": {
       "pre-commit": "npm run lint",
-      "commit-msg": "commitlint -e $GIT_PARAMS"
+      "commit-msg": "commitlint -e $GIT_PARAMS",
+      "pre-push":"npm run doc:publish"
     }
   },
   "files": [
