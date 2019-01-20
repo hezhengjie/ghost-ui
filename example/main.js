@@ -6,17 +6,12 @@ import Ghost from '../src/index'
 import App from './App.vue'
 import router from './router'
 import FastClick from 'fastclick'
-import VueLazyload from 'vue-lazyload'
+import vConsole from 'vconsole'
 
-/* eslint-disable no-unused-vars */
-// import vConsole from 'vconsole'
-
-window.Promise = window.Promise || Promise
 
 FastClick.attach(document.body) //  hack the active pseudo-classes failure caused by -webkit-overflow-scrolling touch
 
 Vue.use(VueRouter)
-Vue.use(VueLazyload)
 /* eslint-disable no-new */
 new Vue({
   router,

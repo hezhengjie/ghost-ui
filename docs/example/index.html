@@ -1,1 +1,37 @@
-<!DOCTYPE html><html><head><meta charset=UTF-8><title>Ghost-ui lib</title><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover"><link href=css/app.87dd528e5a6dce138cd4209cd2b650e8.css rel=stylesheet></head><body><div id=app></div><script type=text/javascript src=js/manifest.346dd10710fe9c0348bf.js></script><script type=text/javascript src=js/vendor.9b5d5d3c9aed3a16d158.js></script><script type=text/javascript src=js/app.88aab3584047e78e968d.js></script></body></html>
+<!DOCTYPE html><html><head><meta charset=UTF-8><title>Ghost-ui lib</title><meta name=viewport content="width=device-width,user-scalable=no,initial-scale=1,maximum-scale=1,minimum-scale=1"><script>/**
+ * @license
+ * Copyright (c) 2016 The Polymer Project Authors. All rights reserved.
+ * This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+ * The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+ * The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+ * Code distributed by Google as part of the polymer project is also
+ * subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+ */
+
+/**
+ * This shim allows elements written in, or compiled to, ES5 to work on native
+ * implementations of Custom Elements v1. It sets new.target to the value of
+ * this.constructor so that the native HTMLElement constructor can access the
+ * current under-construction element's definition.
+ */
+(function() {
+  if (
+    // No Reflect, no classes, no need for shim because native custom elements
+    // require ES2015 classes or Reflect.
+    window.Reflect === undefined ||
+    window.customElements === undefined ||
+    // The webcomponentsjs custom elements polyfill doesn't require
+    // ES2015-compatible construction (`super()` or `Reflect.construct`).
+    window.customElements.hasOwnProperty('polyfillWrapFlushCallback')
+  ) {
+    return;
+  }
+  const BuiltInHTMLElement = HTMLElement;
+  window.HTMLElement = /** @this {!Object} */ function HTMLElement() {
+    return Reflect.construct(
+        BuiltInHTMLElement, [], /** @type {!Function} */ (this.constructor));
+  };
+  HTMLElement.prototype = BuiltInHTMLElement.prototype;
+  HTMLElement.prototype.constructor = HTMLElement;
+  Object.setPrototypeOf(HTMLElement, BuiltInHTMLElement);
+})();</script><link href=./css/app.8f44bac0e273c9a327e911a103e4247f.css rel=stylesheet></head><body><div id=app></div><script type=text/javascript src=./js/manifest.5ebdb86dbeef19313db4.js></script><script type=text/javascript src=./js/vendor.677d06821f17cfbcbe74.js></script><script type=text/javascript src=./js/app.fc89026b7e0e849439ab.js></script></body></html>

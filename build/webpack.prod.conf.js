@@ -8,7 +8,7 @@ var ExtractTextPlugin = require('extract-text-webpack-plugin')
 
 var webpackConfig = merge(baseWebpackConfig, {
   entry: {
-    cube: './src/index.js'
+    ghost: './src/index.js'
   },
   module: {
     rules: utils.styleLoaders({
@@ -20,7 +20,7 @@ var webpackConfig = merge(baseWebpackConfig, {
   output: {
     path: config.build.assetsRoot,
     filename: utils.assetsPath('index.js'),
-    library: 'cube',
+    library:'ghost',
     libraryTarget: 'umd'
   },
   plugins: [

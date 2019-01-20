@@ -1,14 +1,14 @@
-## Button
+# Button
 
 按钮，提供了各种类型、样子、状态以及图标。
 
 ### 示例
-
+<demo hash="button"></demo>
 - 按钮类型
 
   默认类型为 `button`，还可设置为 `submit` 用于表单中
   ```html
-  <cube-button>Button</cube-button>
+  
   <cube-button type="submit">Submit Button</cube-button>
   ```
 

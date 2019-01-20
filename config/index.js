@@ -47,6 +47,7 @@ module.exports = {
     port: 8082,
   },
   demoBuild: {
+    env: require('./prod.env'),
     entry: {
       app: './example/main.js'
     },
