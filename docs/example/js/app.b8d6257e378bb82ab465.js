@@ -167,28 +167,6 @@ var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_
 
 /***/ }),
 
-/***/ "LIRj":
-/***/ (function(module, __webpack_exports__, __webpack_require__) {
-
-"use strict";
-/* harmony export (immutable) */ __webpack_exports__["a"] = camelize;
-/* unused harmony export kebab */
-const camelizeRE = /-(\w)/g
-function camelize (str) {
-  str = String(str)
-  return str.replace(camelizeRE, function (m, c) {
-    return c ? c.toUpperCase() : ''
-  })
-}
-
-function kebab (str) {
-  str = String(str)
-  return str.replace(/([A-Z])/g, '-$1').toLowerCase()
-}
-
-
-/***/ }),
-
 /***/ "P7ce":
 /***/ (function(module, exports) {
 
@@ -358,7 +336,7 @@ new __WEBPACK_IMPORTED_MODULE_0_vue__["a" /* default */]({
 /* unused harmony export isString */
 /* unused harmony export isObject */
 /* unused harmony export isNumber */
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__lang_string__ = __webpack_require__("LIRj");
+throw new Error("Cannot find module \"../lang/string\"");
 
 
 function findIndex(ary, fn) {
@@ -518,7 +496,7 @@ function debounce(func, wait, immediate, initValue) {
 function processComponentName(Component, { prefix = '', firstUpperCase = false } = {}) {
   const name = Component.name
   const pureName = name.replace(/^cube-/i, '')
-  let camelizeName = `${Object(__WEBPACK_IMPORTED_MODULE_0__lang_string__["a" /* camelize */])(`${prefix}${pureName}`)}`
+  let camelizeName = `${Object(__WEBPACK_IMPORTED_MODULE_0__lang_string__["camelize"])(`${prefix}${pureName}`)}`
    /* istanbul ignore if */
   if (firstUpperCase) {
     camelizeName = camelizeName.charAt(0).toUpperCase() + camelizeName.slice(1)
