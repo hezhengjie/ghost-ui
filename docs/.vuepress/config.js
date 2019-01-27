@@ -1,7 +1,7 @@
 module.exports = {
     title: 'Ghost UI',
     description: '基于web component的UI组件库',
-    base:'/ghost-ui-doc/',
+    // base:'/ghost-ui-doc/',
     themeConfig: {
         nav: [
           { text: '文档', link: '/common/intro' },

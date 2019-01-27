@@ -6,7 +6,6 @@ import Ghost from '../src/index'
 import App from './App.vue'
 import router from './router'
 import FastClick from 'fastclick'
-import vConsole from 'vconsole'
 
 
 FastClick.attach(document.body) //  hack the active pseudo-classes failure caused by -webkit-overflow-scrolling touch
