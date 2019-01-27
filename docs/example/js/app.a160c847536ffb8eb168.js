@@ -26,19 +26,21 @@ class Button extends __WEBPACK_IMPORTED_MODULE_0__polymer_polymer_polymer_elemen
       type: {
         type: String,
         value: 'default'
+      },
+      bg: {
+        type: String,
+        vaule: ''
+      },
+      border: {
+        type: String,
+        vaule: ''
+      },
+      color: {
+        type: String,
+        vaule: ''
       }
     }
   }
-    // connectedCallback() {
-    //     this.initShadowDom();
-    // }
-
-    // initShadowDom() {
-        // @polymer默认生成shadowDom
-    //     let shadowRoot = this.attachShadow({mode: 'open'});
-    //     shadowRoot.innerHTML = this.template;
-    // }
-
   static get template() {
     return __WEBPACK_IMPORTED_MODULE_0__polymer_polymer_polymer_element_js__["b" /* html */]`
           <style>
@@ -58,17 +60,23 @@ class Button extends __WEBPACK_IMPORTED_MODULE_0__polymer_polymer_polymer_elemen
                 line-height: 41px;
                 border-radius:4px;
                 -webkit-background-clip: padding-box;
-                color: #000;
-                background-color: #fff;
-                border: 1px solid #ddd;
+                border: 1px solid #ccc;
+                background: none;
+                color: #333;
+                border-radius: 20px;
             }
             :host([type="primary"]) .g-button {
                 color: #fff;
-                background-color: #108ee9;
-                border: 1px solid #108ee9;
+                border: 1px solid #f63;
+                background-color: #f63;
+            }
+            :host([disabled]) .g-button{
+              color: #fff;
+              background-color: #CCCCCC;
+              border: 1px solid #ccc;
             }
           </style>
-          <button class="btn g-button">
+          <button class="btn g-button" style$="background-color:[[bg]];color:[[color]];border:[[border]]">
             <span>[[text]]</span>
           </button>
         `
@@ -76,6 +84,50 @@ class Button extends __WEBPACK_IMPORTED_MODULE_0__polymer_polymer_polymer_elemen
   }
 /* harmony default export */ __webpack_exports__["a"] = (Button);
 
+
+/***/ }),
+
+/***/ "JHHX":
+/***/ (function(module, exports, __webpack_require__) {
+
+var __WEBPACK_AMD_DEFINE_FACTORY__, __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;(function (global, factory) {
+  if (true) {
+    !(__WEBPACK_AMD_DEFINE_ARRAY__ = [module, exports], __WEBPACK_AMD_DEFINE_FACTORY__ = (factory),
+				__WEBPACK_AMD_DEFINE_RESULT__ = (typeof __WEBPACK_AMD_DEFINE_FACTORY__ === 'function' ?
+				(__WEBPACK_AMD_DEFINE_FACTORY__.apply(exports, __WEBPACK_AMD_DEFINE_ARRAY__)) : __WEBPACK_AMD_DEFINE_FACTORY__),
+				__WEBPACK_AMD_DEFINE_RESULT__ !== undefined && (module.exports = __WEBPACK_AMD_DEFINE_RESULT__));
+  } else if (typeof exports !== "undefined") {
+    factory(module, exports);
+  } else {
+    var mod = {
+      exports: {}
+    };
+    factory(mod, mod.exports);
+    global.button = mod.exports;
+  }
+})(this, function (module, exports) {
+  'use strict';
+
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.default = {
+    data: function data() {
+      return {
+        bg: '#000',
+        color: '#f63',
+        border: 'none'
+      };
+    },
+
+    methods: {
+      handleClick: function handleClick() {
+        alert('oh ha');
+      }
+    }
+  };
+  module.exports = exports['default'];
+});
 
 /***/ }),
 
@@ -158,7 +210,94 @@ module.exports={render:function (){var _vm=this;var _h=_vm.$createElement;var _c
     }
   })], 1), _vm._v(" "), _c('div', {
     staticClass: "btn"
-  }, [_c('g-button')], 1)])
+  }, [_c('g-button', {
+    attrs: {
+      "disabled": "",
+      "text": "disable按钮"
+    }
+  })], 1), _vm._v(" "), _c('div', {
+    staticClass: "btn"
+  }, [_c('g-button', {
+    attrs: {
+      "text": "自定义样式",
+      "type": "primary",
+      "bg": _vm.bg,
+      "color": _vm.color,
+      "border": _vm.border
+    }
+  })], 1), _vm._v(" "), _c('div', [_c('div', {
+    staticClass: "form-item"
+  }, [_c('label', [_vm._v("背景色")]), _vm._v(" "), _c('input', {
+    directives: [{
+      name: "model",
+      rawName: "v-model",
+      value: (_vm.bg),
+      expression: "bg"
+    }],
+    attrs: {
+      "type": "text",
+      "placeholder": "背景色"
+    },
+    domProps: {
+      "value": (_vm.bg)
+    },
+    on: {
+      "input": function($event) {
+        if ($event.target.composing) { return; }
+        _vm.bg = $event.target.value
+      }
+    }
+  })]), _vm._v(" "), _c('div', {
+    staticClass: "form-item"
+  }, [_c('label', [_vm._v("文字颜色")]), _vm._v(" "), _c('input', {
+    directives: [{
+      name: "model",
+      rawName: "v-model",
+      value: (_vm.color),
+      expression: "color"
+    }],
+    attrs: {
+      "type": "text",
+      "placeholder": "文字颜色"
+    },
+    domProps: {
+      "value": (_vm.color)
+    },
+    on: {
+      "input": function($event) {
+        if ($event.target.composing) { return; }
+        _vm.color = $event.target.value
+      }
+    }
+  })]), _vm._v(" "), _c('div', {
+    staticClass: "form-item"
+  }, [_c('label', [_vm._v("边框")]), _vm._v(" "), _c('input', {
+    directives: [{
+      name: "model",
+      rawName: "v-model",
+      value: (_vm.border),
+      expression: "border"
+    }],
+    attrs: {
+      "type": "text",
+      "placeholder": "边框"
+    },
+    domProps: {
+      "value": (_vm.border)
+    },
+    on: {
+      "input": function($event) {
+        if ($event.target.composing) { return; }
+        _vm.border = $event.target.value
+      }
+    }
+  })])]), _vm._v(" "), _c('div', {
+    staticClass: "btn"
+  }, [_c('g-button', {
+    on: {
+      "click": _vm.handleClick
+    }
+  })], 1)])
 },staticRenderFns: []}
 
 /***/ }),
@@ -176,11 +315,8 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__router__ = __webpack_require__("z16Y");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_5_fastclick__ = __webpack_require__("v5o6");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_5_fastclick___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_5_fastclick__);
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_6_vconsole__ = __webpack_require__("Lw6n");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_6_vconsole___default = __webpack_require__.n(__WEBPACK_IMPORTED_MODULE_6_vconsole__);
 // The Vue build version to load with the `import` command
 // (runtime-only or standalone) has been set in webpack.base.conf with an alias.
-
 
 
 
@@ -564,7 +700,7 @@ function injectStyle (ssrContext) {
 }
 var Component = __webpack_require__("VU/8")(
   /* script */
-  null,
+  __webpack_require__("JHHX"),
   /* template */
   __webpack_require__("P7ce"),
   /* styles */
