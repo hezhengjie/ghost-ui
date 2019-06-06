@@ -5,9 +5,6 @@ import {
   // basic
   Button
 } from './module'
-
-import { processComponentName } from './common/helpers/util'
-
 const components = [
   // basic
   Button
@@ -19,10 +16,7 @@ const Ghost = {
 }
 
 components.forEach((Component) => {
-  const name = processComponentName(Component, {
-    firstUpperCase: true
-  })
-  Ghost[name] = Component
+  Ghost[name] = Component.name
 })
 
 export default Ghost

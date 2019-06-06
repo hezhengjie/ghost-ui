@@ -9,6 +9,6 @@ cd docs/.vuepress/dist
 git init
 git add -A
 git commit -m 'build: docs'
-git push -f https://github.com/hezhengjie/ghost-ui-doc.git master:gh-pages
+git push -f https://github.com/hezhengjie/ghost-ui-doc.git master
 
 cd -
