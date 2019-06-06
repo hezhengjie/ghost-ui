@@ -5,8 +5,8 @@ webpackJsonp([0],{
 
 "use strict";
 /* WEBPACK VAR INJECTION */(function(global, setImmediate) {/*!
- * Vue.js v2.5.21
- * (c) 2014-2018 Evan You
+ * Vue.js v2.6.10
+ * (c) 2014-2019 Evan You
  * Released under the MIT License.
  */
 /*  */
@@ -82,13 +82,21 @@ function isValidArrayIndex (val) {
   return n >= 0 && Math.floor(n) === n && isFinite(val)
 }
 
+function isPromise (val) {
+  return (
+    isDef(val) &&
+    typeof val.then === 'function' &&
+    typeof val.catch === 'function'
+  )
+}
+
 /**
  * Convert a value to a string that is actually rendered.
  */
 function toString (val) {
   return val == null
     ? ''
-    : typeof val === 'object'
+    : Array.isArray(val) || (isPlainObject(val) && val.toString === _toString)
       ? JSON.stringify(val, null, 2)
       : String(val)
 }
@@ -355,7 +363,8 @@ var LIFECYCLE_HOOKS = [
   'destroyed',
   'activated',
   'deactivated',
-  'errorCaptured'
+  'errorCaptured',
+  'serverPrefetch'
 ];
 
 /*  */
@@ -459,6 +468,13 @@ var config = ({
 /*  */
 
 /**
+ * unicode letters used for parsing html tags, component names and property paths.
+ * using https://www.w3.org/TR/html53/semantics-scripting.html#potentialcustomelementname
+ * skipping \u10000-\uEFFFF due to it freezing up PhantomJS
+ */
+var unicodeRegExp = /a-zA-Z\u00B7\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u037D\u037F-\u1FFF\u200C-\u200D\u203F-\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD/;
+
+/**
  * Check if a string starts with $ or _
  */
 function isReserved (str) {
@@ -481,7 +497,7 @@ function def (obj, key, val, enumerable) {
 /**
  * Parse simple path.
  */
-var bailRE = /[^\w.$]/;
+var bailRE = new RegExp(("[^" + (unicodeRegExp.source) + ".$_\\d]"));
 function parsePath (path) {
   if (bailRE.test(path)) {
     return
@@ -512,6 +528,8 @@ var isEdge = UA && UA.indexOf('edge/') > 0;
 var isAndroid = (UA && UA.indexOf('android') > 0) || (weexPlatform === 'android');
 var isIOS = (UA && /iphone|ipad|ipod|ios/.test(UA)) || (weexPlatform === 'ios');
 var isChrome = UA && /chrome\/\d+/.test(UA) && !isEdge;
+var isPhantomJS = UA && /phantomjs/.test(UA);
+var isFF = UA && UA.match(/firefox\/(\d+)/);
 
 // Firefox has a "watch" function on Object.prototype...
 var nativeWatch = ({}).watch;
@@ -624,7 +642,7 @@ if (false) {
       ? vm.options
       : vm._isVue
         ? vm.$options || vm.constructor.options
-        : vm || {};
+        : vm;
     var name = options.name || options._componentTag;
     var file = options.__file;
     if (!name && file) {
@@ -719,9 +737,9 @@ Dep.prototype.notify = function notify () {
   }
 };
 
-// the current target watcher being evaluated.
-// this is globally unique because there could be only one
-// watcher being evaluated at any time.
+// The current target watcher being evaluated.
+// This is globally unique because only one watcher
+// can be evaluated at a time.
 Dep.target = null;
 var targetStack = [];
 
@@ -1155,9 +1173,15 @@ if (false) {
 function mergeData (to, from) {
   if (!from) { return to }
   var key, toVal, fromVal;
-  var keys = Object.keys(from);
+
+  var keys = hasSymbol
+    ? Reflect.ownKeys(from)
+    : Object.keys(from);
+
   for (var i = 0; i < keys.length; i++) {
     key = keys[i];
+    // in case the object is already observed...
+    if (key === '__ob__') { continue }
     toVal = to[key];
     fromVal = from[key];
     if (!hasOwn(to, key)) {
@@ -1247,13 +1271,26 @@ function mergeHook (
   parentVal,
   childVal
 ) {
-  return childVal
+  var res = childVal
     ? parentVal
       ? parentVal.concat(childVal)
       : Array.isArray(childVal)
         ? childVal
         : [childVal]
-    : parentVal
+    : parentVal;
+  return res
+    ? dedupeHooks(res)
+    : res
+}
+
+function dedupeHooks (hooks) {
+  var res = [];
+  for (var i = 0; i < hooks.length; i++) {
+    if (res.indexOf(hooks[i]) === -1) {
+      res.push(hooks[i]);
+    }
+  }
+  return res
 }
 
 LIFECYCLE_HOOKS.forEach(function (hook) {
@@ -1364,11 +1401,10 @@ function checkComponents (options) {
 }
 
 function validateComponentName (name) {
-  if (!/^[a-zA-Z][\w-]*$/.test(name)) {
+  if (!new RegExp(("^[a-zA-Z][\\-\\.0-9_" + (unicodeRegExp.source) + "]*$")).test(name)) {
     warn(
       'Invalid component name: "' + name + '". Component names ' +
-      'can only contain alphanumeric characters and the hyphen, ' +
-      'and must start with a letter.'
+      'should conform to valid custom element name in html5 specification.'
     );
   }
   if (isBuiltInTag(name) || config.isReservedTag(name)) {
@@ -1451,9 +1487,9 @@ function normalizeDirectives (options) {
   var dirs = options.directives;
   if (dirs) {
     for (var key in dirs) {
-      var def = dirs[key];
-      if (typeof def === 'function') {
-        dirs[key] = { bind: def, update: def };
+      var def$$1 = dirs[key];
+      if (typeof def$$1 === 'function') {
+        dirs[key] = { bind: def$$1, update: def$$1 };
       }
     }
   }
@@ -1489,7 +1525,7 @@ function mergeOptions (
   normalizeProps(child, vm);
   normalizeInject(child, vm);
   normalizeDirectives(child);
-  
+
   // Apply extends and mixins on the child options,
   // but only if it is a raw options object that isn't
   // the result of another mergeOptions call.
@@ -1782,23 +1818,52 @@ function isBoolean () {
 /*  */
 
 function handleError (err, vm, info) {
-  if (vm) {
-    var cur = vm;
-    while ((cur = cur.$parent)) {
-      var hooks = cur.$options.errorCaptured;
-      if (hooks) {
-        for (var i = 0; i < hooks.length; i++) {
-          try {
-            var capture = hooks[i].call(cur, err, vm, info) === false;
-            if (capture) { return }
-          } catch (e) {
-            globalHandleError(e, cur, 'errorCaptured hook');
+  // Deactivate deps tracking while processing error handler to avoid possible infinite rendering.
+  // See: https://github.com/vuejs/vuex/issues/1505
+  pushTarget();
+  try {
+    if (vm) {
+      var cur = vm;
+      while ((cur = cur.$parent)) {
+        var hooks = cur.$options.errorCaptured;
+        if (hooks) {
+          for (var i = 0; i < hooks.length; i++) {
+            try {
+              var capture = hooks[i].call(cur, err, vm, info) === false;
+              if (capture) { return }
+            } catch (e) {
+              globalHandleError(e, cur, 'errorCaptured hook');
+            }
           }
         }
       }
     }
+    globalHandleError(err, vm, info);
+  } finally {
+    popTarget();
   }
-  globalHandleError(err, vm, info);
+}
+
+function invokeWithErrorHandling (
+  handler,
+  context,
+  args,
+  vm,
+  info
+) {
+  var res;
+  try {
+    res = args ? handler.apply(context, args) : handler.call(context);
+    if (res && !res._isVue && isPromise(res) && !res._handled) {
+      res.catch(function (e) { return handleError(e, vm, info + " (Promise/async)"); });
+      // issue #9511
+      // avoid catch triggering multiple times when nested calls
+      res._handled = true;
+    }
+  } catch (e) {
+    handleError(e, vm, info);
+  }
+  return res
 }
 
 function globalHandleError (err, vm, info) {
@@ -1806,7 +1871,11 @@ function globalHandleError (err, vm, info) {
     try {
       return config.errorHandler.call(null, err, vm, info)
     } catch (e) {
-      logError(e, null, 'config.errorHandler');
+      // if the user intentionally throws the original error in the handler,
+      // do not log it twice
+      if (e !== err) {
+        logError(e, null, 'config.errorHandler');
+      }
     }
   }
   logError(err, vm, info);
@@ -1826,6 +1895,8 @@ function logError (err, vm, info) {
 
 /*  */
 
+var isUsingMicroTask = false;
+
 var callbacks = [];
 var pending = false;
 
@@ -1838,76 +1909,69 @@ function flushCallbacks () {
   }
 }
 
-// Here we have async deferring wrappers using both microtasks and (macro) tasks.
-// In < 2.4 we used microtasks everywhere, but there are some scenarios where
-// microtasks have too high a priority and fire in between supposedly
-// sequential events (e.g. #4521, #6690) or even between bubbling of the same
-// event (#6566). However, using (macro) tasks everywhere also has subtle problems
-// when state is changed right before repaint (e.g. #6813, out-in transitions).
-// Here we use microtask by default, but expose a way to force (macro) task when
-// needed (e.g. in event handlers attached by v-on).
-var microTimerFunc;
-var macroTimerFunc;
-var useMacroTask = false;
+// Here we have async deferring wrappers using microtasks.
+// In 2.5 we used (macro) tasks (in combination with microtasks).
+// However, it has subtle problems when state is changed right before repaint
+// (e.g. #6813, out-in transitions).
+// Also, using (macro) tasks in event handler would cause some weird behaviors
+// that cannot be circumvented (e.g. #7109, #7153, #7546, #7834, #8109).
+// So we now use microtasks everywhere, again.
+// A major drawback of this tradeoff is that there are some scenarios
+// where microtasks have too high a priority and fire in between supposedly
+// sequential events (e.g. #4521, #6690, which have workarounds)
+// or even between bubbling of the same event (#6566).
+var timerFunc;
 
-// Determine (macro) task defer implementation.
-// Technically setImmediate should be the ideal choice, but it's only available
-// in IE. The only polyfill that consistently queues the callback after all DOM
-// events triggered in the same loop is by using MessageChannel.
-/* istanbul ignore if */
-if (typeof setImmediate !== 'undefined' && isNative(setImmediate)) {
-  macroTimerFunc = function () {
-    setImmediate(flushCallbacks);
-  };
-} else if (typeof MessageChannel !== 'undefined' && (
-  isNative(MessageChannel) ||
-  // PhantomJS
-  MessageChannel.toString() === '[object MessageChannelConstructor]'
-)) {
-  var channel = new MessageChannel();
-  var port = channel.port2;
-  channel.port1.onmessage = flushCallbacks;
-  macroTimerFunc = function () {
-    port.postMessage(1);
-  };
-} else {
-  /* istanbul ignore next */
-  macroTimerFunc = function () {
-    setTimeout(flushCallbacks, 0);
-  };
-}
-
-// Determine microtask defer implementation.
+// The nextTick behavior leverages the microtask queue, which can be accessed
+// via either native Promise.then or MutationObserver.
+// MutationObserver has wider support, however it is seriously bugged in
+// UIWebView in iOS >= 9.3.3 when triggered in touch event handlers. It
+// completely stops working after triggering a few times... so, if native
+// Promise is available, we will use it:
 /* istanbul ignore next, $flow-disable-line */
 if (typeof Promise !== 'undefined' && isNative(Promise)) {
   var p = Promise.resolve();
-  microTimerFunc = function () {
+  timerFunc = function () {
     p.then(flushCallbacks);
-    // in problematic UIWebViews, Promise.then doesn't completely break, but
+    // In problematic UIWebViews, Promise.then doesn't completely break, but
     // it can get stuck in a weird state where callbacks are pushed into the
     // microtask queue but the queue isn't being flushed, until the browser
     // needs to do some other work, e.g. handle a timer. Therefore we can
     // "force" the microtask queue to be flushed by adding an empty timer.
     if (isIOS) { setTimeout(noop); }
   };
+  isUsingMicroTask = true;
+} else if (!isIE && typeof MutationObserver !== 'undefined' && (
+  isNative(MutationObserver) ||
+  // PhantomJS and iOS 7.x
+  MutationObserver.toString() === '[object MutationObserverConstructor]'
+)) {
+  // Use MutationObserver where native Promise is not available,
+  // e.g. PhantomJS, iOS7, Android 4.4
+  // (#6466 MutationObserver is unreliable in IE11)
+  var counter = 1;
+  var observer = new MutationObserver(flushCallbacks);
+  var textNode = document.createTextNode(String(counter));
+  observer.observe(textNode, {
+    characterData: true
+  });
+  timerFunc = function () {
+    counter = (counter + 1) % 2;
+    textNode.data = String(counter);
+  };
+  isUsingMicroTask = true;
+} else if (typeof setImmediate !== 'undefined' && isNative(setImmediate)) {
+  // Fallback to setImmediate.
+  // Techinically it leverages the (macro) task queue,
+  // but it is still a better choice than setTimeout.
+  timerFunc = function () {
+    setImmediate(flushCallbacks);
+  };
 } else {
-  // fallback to macro
-  microTimerFunc = macroTimerFunc;
-}
-
-/**
- * Wrap a function so that if any code inside triggers state change,
- * the changes are queued using a (macro) task instead of a microtask.
- */
-function withMacroTask (fn) {
-  return fn._withTask || (fn._withTask = function () {
-    useMacroTask = true;
-    try {
-      return fn.apply(null, arguments)
-    } finally {
-      useMacroTask = false;    
-    }
-  })
+  // Fallback to setTimeout.
+  timerFunc = function () {
+    setTimeout(flushCallbacks, 0);
+  };
 }
 
 function nextTick (cb, ctx) {
@@ -1925,11 +1989,7 @@ function nextTick (cb, ctx) {
   });
   if (!pending) {
     pending = true;
-    if (useMacroTask) {
-      macroTimerFunc();
-    } else {
-      microTimerFunc();
-    }
+    timerFunc();
   }
   // $flow-disable-line
   if (!cb && typeof Promise !== 'undefined') {
@@ -2084,7 +2144,7 @@ if (false) {
       perf.measure(name, startTag, endTag);
       perf.clearMarks(startTag);
       perf.clearMarks(endTag);
-      perf.clearMeasures(name);
+      // perf.clearMeasures(name)
     };
   }
 }
@@ -2106,7 +2166,7 @@ var normalizeEvent = cached(function (name) {
   }
 });
 
-function createFnInvoker (fns) {
+function createFnInvoker (fns, vm) {
   function invoker () {
     var arguments$1 = arguments;
 
@@ -2114,11 +2174,11 @@ function createFnInvoker (fns) {
     if (Array.isArray(fns)) {
       var cloned = fns.slice();
       for (var i = 0; i < cloned.length; i++) {
-        cloned[i].apply(null, arguments$1);
+        invokeWithErrorHandling(cloned[i], null, arguments$1, vm, "v-on handler");
       }
     } else {
       // return handler return value for single handlers
-      return fns.apply(null, arguments)
+      return invokeWithErrorHandling(fns, null, arguments, vm, "v-on handler")
     }
   }
   invoker.fns = fns;
@@ -2145,7 +2205,7 @@ function updateListeners (
       );
     } else if (isUndef(old)) {
       if (isUndef(cur.fns)) {
-        cur = on[name] = createFnInvoker(cur);
+        cur = on[name] = createFnInvoker(cur, vm);
       }
       if (isTrue(event.once)) {
         cur = on[name] = createOnceHandler(event.name, cur, event.capture);
@@ -2356,6 +2416,1172 @@ function normalizeArrayChildren (children, nestedIndex) {
 
 /*  */
 
+function initProvide (vm) {
+  var provide = vm.$options.provide;
+  if (provide) {
+    vm._provided = typeof provide === 'function'
+      ? provide.call(vm)
+      : provide;
+  }
+}
+
+function initInjections (vm) {
+  var result = resolveInject(vm.$options.inject, vm);
+  if (result) {
+    toggleObserving(false);
+    Object.keys(result).forEach(function (key) {
+      /* istanbul ignore else */
+      if (false) {
+        defineReactive$$1(vm, key, result[key], function () {
+          warn(
+            "Avoid mutating an injected value directly since the changes will be " +
+            "overwritten whenever the provided component re-renders. " +
+            "injection being mutated: \"" + key + "\"",
+            vm
+          );
+        });
+      } else {
+        defineReactive$$1(vm, key, result[key]);
+      }
+    });
+    toggleObserving(true);
+  }
+}
+
+function resolveInject (inject, vm) {
+  if (inject) {
+    // inject is :any because flow is not smart enough to figure out cached
+    var result = Object.create(null);
+    var keys = hasSymbol
+      ? Reflect.ownKeys(inject)
+      : Object.keys(inject);
+
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      // #6574 in case the inject object is observed...
+      if (key === '__ob__') { continue }
+      var provideKey = inject[key].from;
+      var source = vm;
+      while (source) {
+        if (source._provided && hasOwn(source._provided, provideKey)) {
+          result[key] = source._provided[provideKey];
+          break
+        }
+        source = source.$parent;
+      }
+      if (!source) {
+        if ('default' in inject[key]) {
+          var provideDefault = inject[key].default;
+          result[key] = typeof provideDefault === 'function'
+            ? provideDefault.call(vm)
+            : provideDefault;
+        } else if (false) {
+          warn(("Injection \"" + key + "\" not found"), vm);
+        }
+      }
+    }
+    return result
+  }
+}
+
+/*  */
+
+
+
+/**
+ * Runtime helper for resolving raw children VNodes into a slot object.
+ */
+function resolveSlots (
+  children,
+  context
+) {
+  if (!children || !children.length) {
+    return {}
+  }
+  var slots = {};
+  for (var i = 0, l = children.length; i < l; i++) {
+    var child = children[i];
+    var data = child.data;
+    // remove slot attribute if the node is resolved as a Vue slot node
+    if (data && data.attrs && data.attrs.slot) {
+      delete data.attrs.slot;
+    }
+    // named slots should only be respected if the vnode was rendered in the
+    // same context.
+    if ((child.context === context || child.fnContext === context) &&
+      data && data.slot != null
+    ) {
+      var name = data.slot;
+      var slot = (slots[name] || (slots[name] = []));
+      if (child.tag === 'template') {
+        slot.push.apply(slot, child.children || []);
+      } else {
+        slot.push(child);
+      }
+    } else {
+      (slots.default || (slots.default = [])).push(child);
+    }
+  }
+  // ignore slots that contains only whitespace
+  for (var name$1 in slots) {
+    if (slots[name$1].every(isWhitespace)) {
+      delete slots[name$1];
+    }
+  }
+  return slots
+}
+
+function isWhitespace (node) {
+  return (node.isComment && !node.asyncFactory) || node.text === ' '
+}
+
+/*  */
+
+function normalizeScopedSlots (
+  slots,
+  normalSlots,
+  prevSlots
+) {
+  var res;
+  var hasNormalSlots = Object.keys(normalSlots).length > 0;
+  var isStable = slots ? !!slots.$stable : !hasNormalSlots;
+  var key = slots && slots.$key;
+  if (!slots) {
+    res = {};
+  } else if (slots._normalized) {
+    // fast path 1: child component re-render only, parent did not change
+    return slots._normalized
+  } else if (
+    isStable &&
+    prevSlots &&
+    prevSlots !== emptyObject &&
+    key === prevSlots.$key &&
+    !hasNormalSlots &&
+    !prevSlots.$hasNormal
+  ) {
+    // fast path 2: stable scoped slots w/ no normal slots to proxy,
+    // only need to normalize once
+    return prevSlots
+  } else {
+    res = {};
+    for (var key$1 in slots) {
+      if (slots[key$1] && key$1[0] !== '$') {
+        res[key$1] = normalizeScopedSlot(normalSlots, key$1, slots[key$1]);
+      }
+    }
+  }
+  // expose normal slots on scopedSlots
+  for (var key$2 in normalSlots) {
+    if (!(key$2 in res)) {
+      res[key$2] = proxyNormalSlot(normalSlots, key$2);
+    }
+  }
+  // avoriaz seems to mock a non-extensible $scopedSlots object
+  // and when that is passed down this would cause an error
+  if (slots && Object.isExtensible(slots)) {
+    (slots)._normalized = res;
+  }
+  def(res, '$stable', isStable);
+  def(res, '$key', key);
+  def(res, '$hasNormal', hasNormalSlots);
+  return res
+}
+
+function normalizeScopedSlot(normalSlots, key, fn) {
+  var normalized = function () {
+    var res = arguments.length ? fn.apply(null, arguments) : fn({});
+    res = res && typeof res === 'object' && !Array.isArray(res)
+      ? [res] // single vnode
+      : normalizeChildren(res);
+    return res && (
+      res.length === 0 ||
+      (res.length === 1 && res[0].isComment) // #9658
+    ) ? undefined
+      : res
+  };
+  // this is a slot using the new v-slot syntax without scope. although it is
+  // compiled as a scoped slot, render fn users would expect it to be present
+  // on this.$slots because the usage is semantically a normal slot.
+  if (fn.proxy) {
+    Object.defineProperty(normalSlots, key, {
+      get: normalized,
+      enumerable: true,
+      configurable: true
+    });
+  }
+  return normalized
+}
+
+function proxyNormalSlot(slots, key) {
+  return function () { return slots[key]; }
+}
+
+/*  */
+
+/**
+ * Runtime helper for rendering v-for lists.
+ */
+function renderList (
+  val,
+  render
+) {
+  var ret, i, l, keys, key;
+  if (Array.isArray(val) || typeof val === 'string') {
+    ret = new Array(val.length);
+    for (i = 0, l = val.length; i < l; i++) {
+      ret[i] = render(val[i], i);
+    }
+  } else if (typeof val === 'number') {
+    ret = new Array(val);
+    for (i = 0; i < val; i++) {
+      ret[i] = render(i + 1, i);
+    }
+  } else if (isObject(val)) {
+    if (hasSymbol && val[Symbol.iterator]) {
+      ret = [];
+      var iterator = val[Symbol.iterator]();
+      var result = iterator.next();
+      while (!result.done) {
+        ret.push(render(result.value, ret.length));
+        result = iterator.next();
+      }
+    } else {
+      keys = Object.keys(val);
+      ret = new Array(keys.length);
+      for (i = 0, l = keys.length; i < l; i++) {
+        key = keys[i];
+        ret[i] = render(val[key], key, i);
+      }
+    }
+  }
+  if (!isDef(ret)) {
+    ret = [];
+  }
+  (ret)._isVList = true;
+  return ret
+}
+
+/*  */
+
+/**
+ * Runtime helper for rendering <slot>
+ */
+function renderSlot (
+  name,
+  fallback,
+  props,
+  bindObject
+) {
+  var scopedSlotFn = this.$scopedSlots[name];
+  var nodes;
+  if (scopedSlotFn) { // scoped slot
+    props = props || {};
+    if (bindObject) {
+      if (false) {
+        warn(
+          'slot v-bind without argument expects an Object',
+          this
+        );
+      }
+      props = extend(extend({}, bindObject), props);
+    }
+    nodes = scopedSlotFn(props) || fallback;
+  } else {
+    nodes = this.$slots[name] || fallback;
+  }
+
+  var target = props && props.slot;
+  if (target) {
+    return this.$createElement('template', { slot: target }, nodes)
+  } else {
+    return nodes
+  }
+}
+
+/*  */
+
+/**
+ * Runtime helper for resolving filters
+ */
+function resolveFilter (id) {
+  return resolveAsset(this.$options, 'filters', id, true) || identity
+}
+
+/*  */
+
+function isKeyNotMatch (expect, actual) {
+  if (Array.isArray(expect)) {
+    return expect.indexOf(actual) === -1
+  } else {
+    return expect !== actual
+  }
+}
+
+/**
+ * Runtime helper for checking keyCodes from config.
+ * exposed as Vue.prototype._k
+ * passing in eventKeyName as last argument separately for backwards compat
+ */
+function checkKeyCodes (
+  eventKeyCode,
+  key,
+  builtInKeyCode,
+  eventKeyName,
+  builtInKeyName
+) {
+  var mappedKeyCode = config.keyCodes[key] || builtInKeyCode;
+  if (builtInKeyName && eventKeyName && !config.keyCodes[key]) {
+    return isKeyNotMatch(builtInKeyName, eventKeyName)
+  } else if (mappedKeyCode) {
+    return isKeyNotMatch(mappedKeyCode, eventKeyCode)
+  } else if (eventKeyName) {
+    return hyphenate(eventKeyName) !== key
+  }
+}
+
+/*  */
+
+/**
+ * Runtime helper for merging v-bind="object" into a VNode's data.
+ */
+function bindObjectProps (
+  data,
+  tag,
+  value,
+  asProp,
+  isSync
+) {
+  if (value) {
+    if (!isObject(value)) {
+      "production" !== 'production' && warn(
+        'v-bind without argument expects an Object or Array value',
+        this
+      );
+    } else {
+      if (Array.isArray(value)) {
+        value = toObject(value);
+      }
+      var hash;
+      var loop = function ( key ) {
+        if (
+          key === 'class' ||
+          key === 'style' ||
+          isReservedAttribute(key)
+        ) {
+          hash = data;
+        } else {
+          var type = data.attrs && data.attrs.type;
+          hash = asProp || config.mustUseProp(tag, type, key)
+            ? data.domProps || (data.domProps = {})
+            : data.attrs || (data.attrs = {});
+        }
+        var camelizedKey = camelize(key);
+        var hyphenatedKey = hyphenate(key);
+        if (!(camelizedKey in hash) && !(hyphenatedKey in hash)) {
+          hash[key] = value[key];
+
+          if (isSync) {
+            var on = data.on || (data.on = {});
+            on[("update:" + key)] = function ($event) {
+              value[key] = $event;
+            };
+          }
+        }
+      };
+
+      for (var key in value) loop( key );
+    }
+  }
+  return data
+}
+
+/*  */
+
+/**
+ * Runtime helper for rendering static trees.
+ */
+function renderStatic (
+  index,
+  isInFor
+) {
+  var cached = this._staticTrees || (this._staticTrees = []);
+  var tree = cached[index];
+  // if has already-rendered static tree and not inside v-for,
+  // we can reuse the same tree.
+  if (tree && !isInFor) {
+    return tree
+  }
+  // otherwise, render a fresh tree.
+  tree = cached[index] = this.$options.staticRenderFns[index].call(
+    this._renderProxy,
+    null,
+    this // for render fns generated for functional component templates
+  );
+  markStatic(tree, ("__static__" + index), false);
+  return tree
+}
+
+/**
+ * Runtime helper for v-once.
+ * Effectively it means marking the node as static with a unique key.
+ */
+function markOnce (
+  tree,
+  index,
+  key
+) {
+  markStatic(tree, ("__once__" + index + (key ? ("_" + key) : "")), true);
+  return tree
+}
+
+function markStatic (
+  tree,
+  key,
+  isOnce
+) {
+  if (Array.isArray(tree)) {
+    for (var i = 0; i < tree.length; i++) {
+      if (tree[i] && typeof tree[i] !== 'string') {
+        markStaticNode(tree[i], (key + "_" + i), isOnce);
+      }
+    }
+  } else {
+    markStaticNode(tree, key, isOnce);
+  }
+}
+
+function markStaticNode (node, key, isOnce) {
+  node.isStatic = true;
+  node.key = key;
+  node.isOnce = isOnce;
+}
+
+/*  */
+
+function bindObjectListeners (data, value) {
+  if (value) {
+    if (!isPlainObject(value)) {
+      "production" !== 'production' && warn(
+        'v-on without argument expects an Object value',
+        this
+      );
+    } else {
+      var on = data.on = data.on ? extend({}, data.on) : {};
+      for (var key in value) {
+        var existing = on[key];
+        var ours = value[key];
+        on[key] = existing ? [].concat(existing, ours) : ours;
+      }
+    }
+  }
+  return data
+}
+
+/*  */
+
+function resolveScopedSlots (
+  fns, // see flow/vnode
+  res,
+  // the following are added in 2.6
+  hasDynamicKeys,
+  contentHashKey
+) {
+  res = res || { $stable: !hasDynamicKeys };
+  for (var i = 0; i < fns.length; i++) {
+    var slot = fns[i];
+    if (Array.isArray(slot)) {
+      resolveScopedSlots(slot, res, hasDynamicKeys);
+    } else if (slot) {
+      // marker for reverse proxying v-slot without scope on this.$slots
+      if (slot.proxy) {
+        slot.fn.proxy = true;
+      }
+      res[slot.key] = slot.fn;
+    }
+  }
+  if (contentHashKey) {
+    (res).$key = contentHashKey;
+  }
+  return res
+}
+
+/*  */
+
+function bindDynamicKeys (baseObj, values) {
+  for (var i = 0; i < values.length; i += 2) {
+    var key = values[i];
+    if (typeof key === 'string' && key) {
+      baseObj[values[i]] = values[i + 1];
+    } else if (false) {
+      // null is a speical value for explicitly removing a binding
+      warn(
+        ("Invalid value for dynamic directive argument (expected string or null): " + key),
+        this
+      );
+    }
+  }
+  return baseObj
+}
+
+// helper to dynamically append modifier runtime markers to event names.
+// ensure only append when value is already string, otherwise it will be cast
+// to string and cause the type check to miss.
+function prependModifier (value, symbol) {
+  return typeof value === 'string' ? symbol + value : value
+}
+
+/*  */
+
+function installRenderHelpers (target) {
+  target._o = markOnce;
+  target._n = toNumber;
+  target._s = toString;
+  target._l = renderList;
+  target._t = renderSlot;
+  target._q = looseEqual;
+  target._i = looseIndexOf;
+  target._m = renderStatic;
+  target._f = resolveFilter;
+  target._k = checkKeyCodes;
+  target._b = bindObjectProps;
+  target._v = createTextVNode;
+  target._e = createEmptyVNode;
+  target._u = resolveScopedSlots;
+  target._g = bindObjectListeners;
+  target._d = bindDynamicKeys;
+  target._p = prependModifier;
+}
+
+/*  */
+
+function FunctionalRenderContext (
+  data,
+  props,
+  children,
+  parent,
+  Ctor
+) {
+  var this$1 = this;
+
+  var options = Ctor.options;
+  // ensure the createElement function in functional components
+  // gets a unique context - this is necessary for correct named slot check
+  var contextVm;
+  if (hasOwn(parent, '_uid')) {
+    contextVm = Object.create(parent);
+    // $flow-disable-line
+    contextVm._original = parent;
+  } else {
+    // the context vm passed in is a functional context as well.
+    // in this case we want to make sure we are able to get a hold to the
+    // real context instance.
+    contextVm = parent;
+    // $flow-disable-line
+    parent = parent._original;
+  }
+  var isCompiled = isTrue(options._compiled);
+  var needNormalization = !isCompiled;
+
+  this.data = data;
+  this.props = props;
+  this.children = children;
+  this.parent = parent;
+  this.listeners = data.on || emptyObject;
+  this.injections = resolveInject(options.inject, parent);
+  this.slots = function () {
+    if (!this$1.$slots) {
+      normalizeScopedSlots(
+        data.scopedSlots,
+        this$1.$slots = resolveSlots(children, parent)
+      );
+    }
+    return this$1.$slots
+  };
+
+  Object.defineProperty(this, 'scopedSlots', ({
+    enumerable: true,
+    get: function get () {
+      return normalizeScopedSlots(data.scopedSlots, this.slots())
+    }
+  }));
+
+  // support for compiled functional template
+  if (isCompiled) {
+    // exposing $options for renderStatic()
+    this.$options = options;
+    // pre-resolve slots for renderSlot()
+    this.$slots = this.slots();
+    this.$scopedSlots = normalizeScopedSlots(data.scopedSlots, this.$slots);
+  }
+
+  if (options._scopeId) {
+    this._c = function (a, b, c, d) {
+      var vnode = createElement(contextVm, a, b, c, d, needNormalization);
+      if (vnode && !Array.isArray(vnode)) {
+        vnode.fnScopeId = options._scopeId;
+        vnode.fnContext = parent;
+      }
+      return vnode
+    };
+  } else {
+    this._c = function (a, b, c, d) { return createElement(contextVm, a, b, c, d, needNormalization); };
+  }
+}
+
+installRenderHelpers(FunctionalRenderContext.prototype);
+
+function createFunctionalComponent (
+  Ctor,
+  propsData,
+  data,
+  contextVm,
+  children
+) {
+  var options = Ctor.options;
+  var props = {};
+  var propOptions = options.props;
+  if (isDef(propOptions)) {
+    for (var key in propOptions) {
+      props[key] = validateProp(key, propOptions, propsData || emptyObject);
+    }
+  } else {
+    if (isDef(data.attrs)) { mergeProps(props, data.attrs); }
+    if (isDef(data.props)) { mergeProps(props, data.props); }
+  }
+
+  var renderContext = new FunctionalRenderContext(
+    data,
+    props,
+    children,
+    contextVm,
+    Ctor
+  );
+
+  var vnode = options.render.call(null, renderContext._c, renderContext);
+
+  if (vnode instanceof VNode) {
+    return cloneAndMarkFunctionalResult(vnode, data, renderContext.parent, options, renderContext)
+  } else if (Array.isArray(vnode)) {
+    var vnodes = normalizeChildren(vnode) || [];
+    var res = new Array(vnodes.length);
+    for (var i = 0; i < vnodes.length; i++) {
+      res[i] = cloneAndMarkFunctionalResult(vnodes[i], data, renderContext.parent, options, renderContext);
+    }
+    return res
+  }
+}
+
+function cloneAndMarkFunctionalResult (vnode, data, contextVm, options, renderContext) {
+  // #7817 clone node before setting fnContext, otherwise if the node is reused
+  // (e.g. it was from a cached normal slot) the fnContext causes named slots
+  // that should not be matched to match.
+  var clone = cloneVNode(vnode);
+  clone.fnContext = contextVm;
+  clone.fnOptions = options;
+  if (false) {
+    (clone.devtoolsMeta = clone.devtoolsMeta || {}).renderContext = renderContext;
+  }
+  if (data.slot) {
+    (clone.data || (clone.data = {})).slot = data.slot;
+  }
+  return clone
+}
+
+function mergeProps (to, from) {
+  for (var key in from) {
+    to[camelize(key)] = from[key];
+  }
+}
+
+/*  */
+
+/*  */
+
+/*  */
+
+/*  */
+
+// inline hooks to be invoked on component VNodes during patch
+var componentVNodeHooks = {
+  init: function init (vnode, hydrating) {
+    if (
+      vnode.componentInstance &&
+      !vnode.componentInstance._isDestroyed &&
+      vnode.data.keepAlive
+    ) {
+      // kept-alive components, treat as a patch
+      var mountedNode = vnode; // work around flow
+      componentVNodeHooks.prepatch(mountedNode, mountedNode);
+    } else {
+      var child = vnode.componentInstance = createComponentInstanceForVnode(
+        vnode,
+        activeInstance
+      );
+      child.$mount(hydrating ? vnode.elm : undefined, hydrating);
+    }
+  },
+
+  prepatch: function prepatch (oldVnode, vnode) {
+    var options = vnode.componentOptions;
+    var child = vnode.componentInstance = oldVnode.componentInstance;
+    updateChildComponent(
+      child,
+      options.propsData, // updated props
+      options.listeners, // updated listeners
+      vnode, // new parent vnode
+      options.children // new children
+    );
+  },
+
+  insert: function insert (vnode) {
+    var context = vnode.context;
+    var componentInstance = vnode.componentInstance;
+    if (!componentInstance._isMounted) {
+      componentInstance._isMounted = true;
+      callHook(componentInstance, 'mounted');
+    }
+    if (vnode.data.keepAlive) {
+      if (context._isMounted) {
+        // vue-router#1212
+        // During updates, a kept-alive component's child components may
+        // change, so directly walking the tree here may call activated hooks
+        // on incorrect children. Instead we push them into a queue which will
+        // be processed after the whole patch process ended.
+        queueActivatedComponent(componentInstance);
+      } else {
+        activateChildComponent(componentInstance, true /* direct */);
+      }
+    }
+  },
+
+  destroy: function destroy (vnode) {
+    var componentInstance = vnode.componentInstance;
+    if (!componentInstance._isDestroyed) {
+      if (!vnode.data.keepAlive) {
+        componentInstance.$destroy();
+      } else {
+        deactivateChildComponent(componentInstance, true /* direct */);
+      }
+    }
+  }
+};
+
+var hooksToMerge = Object.keys(componentVNodeHooks);
+
+function createComponent (
+  Ctor,
+  data,
+  context,
+  children,
+  tag
+) {
+  if (isUndef(Ctor)) {
+    return
+  }
+
+  var baseCtor = context.$options._base;
+
+  // plain options object: turn it into a constructor
+  if (isObject(Ctor)) {
+    Ctor = baseCtor.extend(Ctor);
+  }
+
+  // if at this stage it's not a constructor or an async component factory,
+  // reject.
+  if (typeof Ctor !== 'function') {
+    if (false) {
+      warn(("Invalid Component definition: " + (String(Ctor))), context);
+    }
+    return
+  }
+
+  // async component
+  var asyncFactory;
+  if (isUndef(Ctor.cid)) {
+    asyncFactory = Ctor;
+    Ctor = resolveAsyncComponent(asyncFactory, baseCtor);
+    if (Ctor === undefined) {
+      // return a placeholder node for async component, which is rendered
+      // as a comment node but preserves all the raw information for the node.
+      // the information will be used for async server-rendering and hydration.
+      return createAsyncPlaceholder(
+        asyncFactory,
+        data,
+        context,
+        children,
+        tag
+      )
+    }
+  }
+
+  data = data || {};
+
+  // resolve constructor options in case global mixins are applied after
+  // component constructor creation
+  resolveConstructorOptions(Ctor);
+
+  // transform component v-model data into props & events
+  if (isDef(data.model)) {
+    transformModel(Ctor.options, data);
+  }
+
+  // extract props
+  var propsData = extractPropsFromVNodeData(data, Ctor, tag);
+
+  // functional component
+  if (isTrue(Ctor.options.functional)) {
+    return createFunctionalComponent(Ctor, propsData, data, context, children)
+  }
+
+  // extract listeners, since these needs to be treated as
+  // child component listeners instead of DOM listeners
+  var listeners = data.on;
+  // replace with listeners with .native modifier
+  // so it gets processed during parent component patch.
+  data.on = data.nativeOn;
+
+  if (isTrue(Ctor.options.abstract)) {
+    // abstract components do not keep anything
+    // other than props & listeners & slot
+
+    // work around flow
+    var slot = data.slot;
+    data = {};
+    if (slot) {
+      data.slot = slot;
+    }
+  }
+
+  // install component management hooks onto the placeholder node
+  installComponentHooks(data);
+
+  // return a placeholder vnode
+  var name = Ctor.options.name || tag;
+  var vnode = new VNode(
+    ("vue-component-" + (Ctor.cid) + (name ? ("-" + name) : '')),
+    data, undefined, undefined, undefined, context,
+    { Ctor: Ctor, propsData: propsData, listeners: listeners, tag: tag, children: children },
+    asyncFactory
+  );
+
+  return vnode
+}
+
+function createComponentInstanceForVnode (
+  vnode, // we know it's MountedComponentVNode but flow doesn't
+  parent // activeInstance in lifecycle state
+) {
+  var options = {
+    _isComponent: true,
+    _parentVnode: vnode,
+    parent: parent
+  };
+  // check inline-template render functions
+  var inlineTemplate = vnode.data.inlineTemplate;
+  if (isDef(inlineTemplate)) {
+    options.render = inlineTemplate.render;
+    options.staticRenderFns = inlineTemplate.staticRenderFns;
+  }
+  return new vnode.componentOptions.Ctor(options)
+}
+
+function installComponentHooks (data) {
+  var hooks = data.hook || (data.hook = {});
+  for (var i = 0; i < hooksToMerge.length; i++) {
+    var key = hooksToMerge[i];
+    var existing = hooks[key];
+    var toMerge = componentVNodeHooks[key];
+    if (existing !== toMerge && !(existing && existing._merged)) {
+      hooks[key] = existing ? mergeHook$1(toMerge, existing) : toMerge;
+    }
+  }
+}
+
+function mergeHook$1 (f1, f2) {
+  var merged = function (a, b) {
+    // flow complains about extra args which is why we use any
+    f1(a, b);
+    f2(a, b);
+  };
+  merged._merged = true;
+  return merged
+}
+
+// transform component v-model info (value and callback) into
+// prop and event handler respectively.
+function transformModel (options, data) {
+  var prop = (options.model && options.model.prop) || 'value';
+  var event = (options.model && options.model.event) || 'input'
+  ;(data.attrs || (data.attrs = {}))[prop] = data.model.value;
+  var on = data.on || (data.on = {});
+  var existing = on[event];
+  var callback = data.model.callback;
+  if (isDef(existing)) {
+    if (
+      Array.isArray(existing)
+        ? existing.indexOf(callback) === -1
+        : existing !== callback
+    ) {
+      on[event] = [callback].concat(existing);
+    }
+  } else {
+    on[event] = callback;
+  }
+}
+
+/*  */
+
+var SIMPLE_NORMALIZE = 1;
+var ALWAYS_NORMALIZE = 2;
+
+// wrapper function for providing a more flexible interface
+// without getting yelled at by flow
+function createElement (
+  context,
+  tag,
+  data,
+  children,
+  normalizationType,
+  alwaysNormalize
+) {
+  if (Array.isArray(data) || isPrimitive(data)) {
+    normalizationType = children;
+    children = data;
+    data = undefined;
+  }
+  if (isTrue(alwaysNormalize)) {
+    normalizationType = ALWAYS_NORMALIZE;
+  }
+  return _createElement(context, tag, data, children, normalizationType)
+}
+
+function _createElement (
+  context,
+  tag,
+  data,
+  children,
+  normalizationType
+) {
+  if (isDef(data) && isDef((data).__ob__)) {
+    "production" !== 'production' && warn(
+      "Avoid using observed data object as vnode data: " + (JSON.stringify(data)) + "\n" +
+      'Always create fresh vnode data objects in each render!',
+      context
+    );
+    return createEmptyVNode()
+  }
+  // object syntax in v-bind
+  if (isDef(data) && isDef(data.is)) {
+    tag = data.is;
+  }
+  if (!tag) {
+    // in case of component :is set to falsy value
+    return createEmptyVNode()
+  }
+  // warn against non-primitive key
+  if (false
+  ) {
+    {
+      warn(
+        'Avoid using non-primitive value as key, ' +
+        'use string/number value instead.',
+        context
+      );
+    }
+  }
+  // support single function children as default scoped slot
+  if (Array.isArray(children) &&
+    typeof children[0] === 'function'
+  ) {
+    data = data || {};
+    data.scopedSlots = { default: children[0] };
+    children.length = 0;
+  }
+  if (normalizationType === ALWAYS_NORMALIZE) {
+    children = normalizeChildren(children);
+  } else if (normalizationType === SIMPLE_NORMALIZE) {
+    children = simpleNormalizeChildren(children);
+  }
+  var vnode, ns;
+  if (typeof tag === 'string') {
+    var Ctor;
+    ns = (context.$vnode && context.$vnode.ns) || config.getTagNamespace(tag);
+    if (config.isReservedTag(tag)) {
+      // platform built-in elements
+      vnode = new VNode(
+        config.parsePlatformTagName(tag), data, children,
+        undefined, undefined, context
+      );
+    } else if ((!data || !data.pre) && isDef(Ctor = resolveAsset(context.$options, 'components', tag))) {
+      // component
+      vnode = createComponent(Ctor, data, context, children, tag);
+    } else {
+      // unknown or unlisted namespaced elements
+      // check at runtime because it may get assigned a namespace when its
+      // parent normalizes children
+      vnode = new VNode(
+        tag, data, children,
+        undefined, undefined, context
+      );
+    }
+  } else {
+    // direct component options / constructor
+    vnode = createComponent(tag, data, context, children);
+  }
+  if (Array.isArray(vnode)) {
+    return vnode
+  } else if (isDef(vnode)) {
+    if (isDef(ns)) { applyNS(vnode, ns); }
+    if (isDef(data)) { registerDeepBindings(data); }
+    return vnode
+  } else {
+    return createEmptyVNode()
+  }
+}
+
+function applyNS (vnode, ns, force) {
+  vnode.ns = ns;
+  if (vnode.tag === 'foreignObject') {
+    // use default namespace inside foreignObject
+    ns = undefined;
+    force = true;
+  }
+  if (isDef(vnode.children)) {
+    for (var i = 0, l = vnode.children.length; i < l; i++) {
+      var child = vnode.children[i];
+      if (isDef(child.tag) && (
+        isUndef(child.ns) || (isTrue(force) && child.tag !== 'svg'))) {
+        applyNS(child, ns, force);
+      }
+    }
+  }
+}
+
+// ref #5318
+// necessary to ensure parent re-render when deep bindings like :style and
+// :class are used on slot nodes
+function registerDeepBindings (data) {
+  if (isObject(data.style)) {
+    traverse(data.style);
+  }
+  if (isObject(data.class)) {
+    traverse(data.class);
+  }
+}
+
+/*  */
+
+function initRender (vm) {
+  vm._vnode = null; // the root of the child tree
+  vm._staticTrees = null; // v-once cached trees
+  var options = vm.$options;
+  var parentVnode = vm.$vnode = options._parentVnode; // the placeholder node in parent tree
+  var renderContext = parentVnode && parentVnode.context;
+  vm.$slots = resolveSlots(options._renderChildren, renderContext);
+  vm.$scopedSlots = emptyObject;
+  // bind the createElement fn to this instance
+  // so that we get proper render context inside it.
+  // args order: tag, data, children, normalizationType, alwaysNormalize
+  // internal version is used by render functions compiled from templates
+  vm._c = function (a, b, c, d) { return createElement(vm, a, b, c, d, false); };
+  // normalization is always applied for the public version, used in
+  // user-written render functions.
+  vm.$createElement = function (a, b, c, d) { return createElement(vm, a, b, c, d, true); };
+
+  // $attrs & $listeners are exposed for easier HOC creation.
+  // they need to be reactive so that HOCs using them are always updated
+  var parentData = parentVnode && parentVnode.data;
+
+  /* istanbul ignore else */
+  if (false) {
+    defineReactive$$1(vm, '$attrs', parentData && parentData.attrs || emptyObject, function () {
+      !isUpdatingChildComponent && warn("$attrs is readonly.", vm);
+    }, true);
+    defineReactive$$1(vm, '$listeners', options._parentListeners || emptyObject, function () {
+      !isUpdatingChildComponent && warn("$listeners is readonly.", vm);
+    }, true);
+  } else {
+    defineReactive$$1(vm, '$attrs', parentData && parentData.attrs || emptyObject, null, true);
+    defineReactive$$1(vm, '$listeners', options._parentListeners || emptyObject, null, true);
+  }
+}
+
+var currentRenderingInstance = null;
+
+function renderMixin (Vue) {
+  // install runtime convenience helpers
+  installRenderHelpers(Vue.prototype);
+
+  Vue.prototype.$nextTick = function (fn) {
+    return nextTick(fn, this)
+  };
+
+  Vue.prototype._render = function () {
+    var vm = this;
+    var ref = vm.$options;
+    var render = ref.render;
+    var _parentVnode = ref._parentVnode;
+
+    if (_parentVnode) {
+      vm.$scopedSlots = normalizeScopedSlots(
+        _parentVnode.data.scopedSlots,
+        vm.$slots,
+        vm.$scopedSlots
+      );
+    }
+
+    // set parent vnode. this allows render functions to have access
+    // to the data on the placeholder node.
+    vm.$vnode = _parentVnode;
+    // render self
+    var vnode;
+    try {
+      // There's no need to maintain a stack becaues all render fns are called
+      // separately from one another. Nested component's render fns are called
+      // when parent component is patched.
+      currentRenderingInstance = vm;
+      vnode = render.call(vm._renderProxy, vm.$createElement);
+    } catch (e) {
+      handleError(e, vm, "render");
+      // return error render result,
+      // or previous vnode to prevent render error causing blank component
+      /* istanbul ignore else */
+      if (false) {
+        try {
+          vnode = vm.$options.renderError.call(vm._renderProxy, vm.$createElement, e);
+        } catch (e) {
+          handleError(e, vm, "renderError");
+          vnode = vm._vnode;
+        }
+      } else {
+        vnode = vm._vnode;
+      }
+    } finally {
+      currentRenderingInstance = null;
+    }
+    // if the returned array contains only a single node, allow it
+    if (Array.isArray(vnode) && vnode.length === 1) {
+      vnode = vnode[0];
+    }
+    // return empty vnode in case the render function errored out
+    if (!(vnode instanceof VNode)) {
+      if (false) {
+        warn(
+          'Multiple root nodes returned from render function. Render function ' +
+          'should return a single root node.',
+          vm
+        );
+      }
+      vnode = createEmptyVNode();
+    }
+    // set parent
+    vnode.parent = _parentVnode;
+    return vnode
+  };
+}
+
+/*  */
+
 function ensureCtor (comp, base) {
   if (
     comp.__esModule ||
@@ -2383,8 +3609,7 @@ function createAsyncPlaceholder (
 
 function resolveAsyncComponent (
   factory,
-  baseCtor,
-  context
+  baseCtor
 ) {
   if (isTrue(factory.error) && isDef(factory.errorComp)) {
     return factory.errorComp
@@ -2394,24 +3619,39 @@ function resolveAsyncComponent (
     return factory.resolved
   }
 
+  var owner = currentRenderingInstance;
+  if (owner && isDef(factory.owners) && factory.owners.indexOf(owner) === -1) {
+    // already pending
+    factory.owners.push(owner);
+  }
+
   if (isTrue(factory.loading) && isDef(factory.loadingComp)) {
     return factory.loadingComp
   }
 
-  if (isDef(factory.contexts)) {
-    // already pending
-    factory.contexts.push(context);
-  } else {
-    var contexts = factory.contexts = [context];
+  if (owner && !isDef(factory.owners)) {
+    var owners = factory.owners = [owner];
     var sync = true;
+    var timerLoading = null;
+    var timerTimeout = null
+
+    ;(owner).$on('hook:destroyed', function () { return remove(owners, owner); });
 
     var forceRender = function (renderCompleted) {
-      for (var i = 0, l = contexts.length; i < l; i++) {
-        contexts[i].$forceUpdate();
+      for (var i = 0, l = owners.length; i < l; i++) {
+        (owners[i]).$forceUpdate();
       }
 
       if (renderCompleted) {
-        contexts.length = 0;
+        owners.length = 0;
+        if (timerLoading !== null) {
+          clearTimeout(timerLoading);
+          timerLoading = null;
+        }
+        if (timerTimeout !== null) {
+          clearTimeout(timerTimeout);
+          timerTimeout = null;
+        }
       }
     };
 
@@ -2422,6 +3662,8 @@ function resolveAsyncComponent (
       // (async resolves are shimmed as synchronous during SSR)
       if (!sync) {
         forceRender(true);
+      } else {
+        owners.length = 0;
       }
     });
 
@@ -2439,12 +3681,12 @@ function resolveAsyncComponent (
     var res = factory(resolve, reject);
 
     if (isObject(res)) {
-      if (typeof res.then === 'function') {
+      if (isPromise(res)) {
         // () => Promise
         if (isUndef(factory.resolved)) {
           res.then(resolve, reject);
         }
-      } else if (isDef(res.component) && typeof res.component.then === 'function') {
+      } else if (isPromise(res.component)) {
         res.component.then(resolve, reject);
 
         if (isDef(res.error)) {
@@ -2456,7 +3698,8 @@ function resolveAsyncComponent (
           if (res.delay === 0) {
             factory.loading = true;
           } else {
-            setTimeout(function () {
+            timerLoading = setTimeout(function () {
+              timerLoading = null;
               if (isUndef(factory.resolved) && isUndef(factory.error)) {
                 factory.loading = true;
                 forceRender(false);
@@ -2466,7 +3709,8 @@ function resolveAsyncComponent (
         }
 
         if (isDef(res.timeout)) {
-          setTimeout(function () {
+          timerTimeout = setTimeout(function () {
+            timerTimeout = null;
             if (isUndef(factory.resolved)) {
               reject(
                  false
@@ -2589,8 +3833,8 @@ function eventsMixin (Vue) {
     }
     // array of events
     if (Array.isArray(event)) {
-      for (var i = 0, l = event.length; i < l; i++) {
-        vm.$off(event[i], fn);
+      for (var i$1 = 0, l = event.length; i$1 < l; i$1++) {
+        vm.$off(event[i$1], fn);
       }
       return vm
     }
@@ -2603,16 +3847,14 @@ function eventsMixin (Vue) {
       vm._events[event] = null;
       return vm
     }
-    if (fn) {
-      // specific handler
-      var cb;
-      var i$1 = cbs.length;
-      while (i$1--) {
-        cb = cbs[i$1];
-        if (cb === fn || cb.fn === fn) {
-          cbs.splice(i$1, 1);
-          break
-        }
+    // specific handler
+    var cb;
+    var i = cbs.length;
+    while (i--) {
+      cb = cbs[i];
+      if (cb === fn || cb.fn === fn) {
+        cbs.splice(i, 1);
+        break
       }
     }
     return vm
@@ -2636,82 +3878,13 @@ function eventsMixin (Vue) {
     if (cbs) {
       cbs = cbs.length > 1 ? toArray(cbs) : cbs;
       var args = toArray(arguments, 1);
+      var info = "event handler for \"" + event + "\"";
       for (var i = 0, l = cbs.length; i < l; i++) {
-        try {
-          cbs[i].apply(vm, args);
-        } catch (e) {
-          handleError(e, vm, ("event handler for \"" + event + "\""));
-        }
+        invokeWithErrorHandling(cbs[i], vm, args, vm, info);
       }
     }
     return vm
   };
-}
-
-/*  */
-
-
-
-/**
- * Runtime helper for resolving raw children VNodes into a slot object.
- */
-function resolveSlots (
-  children,
-  context
-) {
-  var slots = {};
-  if (!children) {
-    return slots
-  }
-  for (var i = 0, l = children.length; i < l; i++) {
-    var child = children[i];
-    var data = child.data;
-    // remove slot attribute if the node is resolved as a Vue slot node
-    if (data && data.attrs && data.attrs.slot) {
-      delete data.attrs.slot;
-    }
-    // named slots should only be respected if the vnode was rendered in the
-    // same context.
-    if ((child.context === context || child.fnContext === context) &&
-      data && data.slot != null
-    ) {
-      var name = data.slot;
-      var slot = (slots[name] || (slots[name] = []));
-      if (child.tag === 'template') {
-        slot.push.apply(slot, child.children || []);
-      } else {
-        slot.push(child);
-      }
-    } else {
-      (slots.default || (slots.default = [])).push(child);
-    }
-  }
-  // ignore slots that contains only whitespace
-  for (var name$1 in slots) {
-    if (slots[name$1].every(isWhitespace)) {
-      delete slots[name$1];
-    }
-  }
-  return slots
-}
-
-function isWhitespace (node) {
-  return (node.isComment && !node.asyncFactory) || node.text === ' '
-}
-
-function resolveScopedSlots (
-  fns, // see flow/vnode
-  res
-) {
-  res = res || {};
-  for (var i = 0; i < fns.length; i++) {
-    if (Array.isArray(fns[i])) {
-      resolveScopedSlots(fns[i], res);
-    } else {
-      res[fns[i].key] = fns[i].fn;
-    }
-  }
-  return res
 }
 
 /*  */
@@ -2922,12 +4095,26 @@ function updateChildComponent (
   }
 
   // determine whether component has slot children
-  // we need to do this before overwriting $options._renderChildren
-  var hasChildren = !!(
+  // we need to do this before overwriting $options._renderChildren.
+
+  // check if there are dynamic scopedSlots (hand-written or compiled but with
+  // dynamic slot names). Static scoped slots compiled from template has the
+  // "$stable" marker.
+  var newScopedSlots = parentVnode.data.scopedSlots;
+  var oldScopedSlots = vm.$scopedSlots;
+  var hasDynamicScopedSlot = !!(
+    (newScopedSlots && !newScopedSlots.$stable) ||
+    (oldScopedSlots !== emptyObject && !oldScopedSlots.$stable) ||
+    (newScopedSlots && vm.$scopedSlots.$key !== newScopedSlots.$key)
+  );
+
+  // Any static slot children from the parent may have changed during parent's
+  // update. Dynamic scoped slots may also have changed. In such cases, a forced
+  // update is necessary to ensure correctness.
+  var needsForceUpdate = !!(
     renderChildren ||               // has new static slots
     vm.$options._renderChildren ||  // has old static slots
-    parentVnode.data.scopedSlots || // has new scoped slots
-    vm.$scopedSlots !== emptyObject // has old scoped slots
+    hasDynamicScopedSlot
   );
 
   vm.$options._parentVnode = parentVnode;
@@ -2966,7 +4153,7 @@ function updateChildComponent (
   updateComponentListeners(vm, listeners, oldListeners);
 
   // resolve slots + force update if has children
-  if (hasChildren) {
+  if (needsForceUpdate) {
     vm.$slots = resolveSlots(renderChildren, parentVnode.context);
     vm.$forceUpdate();
   }
@@ -3021,13 +4208,10 @@ function callHook (vm, hook) {
   // #7573 disable dep collection when invoking lifecycle hooks
   pushTarget();
   var handlers = vm.$options[hook];
+  var info = hook + " hook";
   if (handlers) {
     for (var i = 0, j = handlers.length; i < j; i++) {
-      try {
-        handlers[i].call(vm);
-      } catch (e) {
-        handleError(e, vm, (hook + " hook"));
-      }
+      invokeWithErrorHandling(handlers[i], vm, null, vm, info);
     }
   }
   if (vm._hasHookEvent) {
@@ -3060,10 +4244,42 @@ function resetSchedulerState () {
   waiting = flushing = false;
 }
 
+// Async edge case #6566 requires saving the timestamp when event listeners are
+// attached. However, calling performance.now() has a perf overhead especially
+// if the page has thousands of event listeners. Instead, we take a timestamp
+// every time the scheduler flushes and use that for all event listeners
+// attached during that flush.
+var currentFlushTimestamp = 0;
+
+// Async edge case fix requires storing an event listener's attach timestamp.
+var getNow = Date.now;
+
+// Determine what event timestamp the browser is using. Annoyingly, the
+// timestamp can either be hi-res (relative to page load) or low-res
+// (relative to UNIX epoch), so in order to compare time we have to use the
+// same timestamp type when saving the flush timestamp.
+// All IE versions use low-res event timestamps, and have problematic clock
+// implementations (#9632)
+if (inBrowser && !isIE) {
+  var performance = window.performance;
+  if (
+    performance &&
+    typeof performance.now === 'function' &&
+    getNow() > document.createEvent('Event').timeStamp
+  ) {
+    // if the event timestamp, although evaluated AFTER the Date.now(), is
+    // smaller than it, it means the event is using a hi-res timestamp,
+    // and we need to use the hi-res version for event listener timestamps as
+    // well.
+    getNow = function () { return performance.now(); };
+  }
+}
+
 /**
  * Flush both queues and run the watchers.
  */
 function flushSchedulerQueue () {
+  currentFlushTimestamp = getNow();
   flushing = true;
   var watcher, id;
 
@@ -3187,7 +4403,7 @@ function queueWatcher (watcher) {
 
 
 
-var uid$1 = 0;
+var uid$2 = 0;
 
 /**
  * A watcher parses an expression, collects dependencies,
@@ -3217,7 +4433,7 @@ var Watcher = function Watcher (
     this.deep = this.user = this.lazy = this.sync = false;
   }
   this.cb = cb;
-  this.id = ++uid$1; // uid for batching
+  this.id = ++uid$2; // uid for batching
   this.active = true;
   this.dirty = this.lazy; // for lazy watchers
   this.deps = [];
@@ -3737,942 +4953,6 @@ function stateMixin (Vue) {
 
 /*  */
 
-function initProvide (vm) {
-  var provide = vm.$options.provide;
-  if (provide) {
-    vm._provided = typeof provide === 'function'
-      ? provide.call(vm)
-      : provide;
-  }
-}
-
-function initInjections (vm) {
-  var result = resolveInject(vm.$options.inject, vm);
-  if (result) {
-    toggleObserving(false);
-    Object.keys(result).forEach(function (key) {
-      /* istanbul ignore else */
-      if (false) {
-        defineReactive$$1(vm, key, result[key], function () {
-          warn(
-            "Avoid mutating an injected value directly since the changes will be " +
-            "overwritten whenever the provided component re-renders. " +
-            "injection being mutated: \"" + key + "\"",
-            vm
-          );
-        });
-      } else {
-        defineReactive$$1(vm, key, result[key]);
-      }
-    });
-    toggleObserving(true);
-  }
-}
-
-function resolveInject (inject, vm) {
-  if (inject) {
-    // inject is :any because flow is not smart enough to figure out cached
-    var result = Object.create(null);
-    var keys = hasSymbol
-      ? Reflect.ownKeys(inject).filter(function (key) {
-        /* istanbul ignore next */
-        return Object.getOwnPropertyDescriptor(inject, key).enumerable
-      })
-      : Object.keys(inject);
-
-    for (var i = 0; i < keys.length; i++) {
-      var key = keys[i];
-      var provideKey = inject[key].from;
-      var source = vm;
-      while (source) {
-        if (source._provided && hasOwn(source._provided, provideKey)) {
-          result[key] = source._provided[provideKey];
-          break
-        }
-        source = source.$parent;
-      }
-      if (!source) {
-        if ('default' in inject[key]) {
-          var provideDefault = inject[key].default;
-          result[key] = typeof provideDefault === 'function'
-            ? provideDefault.call(vm)
-            : provideDefault;
-        } else if (false) {
-          warn(("Injection \"" + key + "\" not found"), vm);
-        }
-      }
-    }
-    return result
-  }
-}
-
-/*  */
-
-/**
- * Runtime helper for rendering v-for lists.
- */
-function renderList (
-  val,
-  render
-) {
-  var ret, i, l, keys, key;
-  if (Array.isArray(val) || typeof val === 'string') {
-    ret = new Array(val.length);
-    for (i = 0, l = val.length; i < l; i++) {
-      ret[i] = render(val[i], i);
-    }
-  } else if (typeof val === 'number') {
-    ret = new Array(val);
-    for (i = 0; i < val; i++) {
-      ret[i] = render(i + 1, i);
-    }
-  } else if (isObject(val)) {
-    keys = Object.keys(val);
-    ret = new Array(keys.length);
-    for (i = 0, l = keys.length; i < l; i++) {
-      key = keys[i];
-      ret[i] = render(val[key], key, i);
-    }
-  }
-  if (!isDef(ret)) {
-    ret = [];
-  }
-  (ret)._isVList = true;
-  return ret
-}
-
-/*  */
-
-/**
- * Runtime helper for rendering <slot>
- */
-function renderSlot (
-  name,
-  fallback,
-  props,
-  bindObject
-) {
-  var scopedSlotFn = this.$scopedSlots[name];
-  var nodes;
-  if (scopedSlotFn) { // scoped slot
-    props = props || {};
-    if (bindObject) {
-      if (false) {
-        warn(
-          'slot v-bind without argument expects an Object',
-          this
-        );
-      }
-      props = extend(extend({}, bindObject), props);
-    }
-    nodes = scopedSlotFn(props) || fallback;
-  } else {
-    nodes = this.$slots[name] || fallback;
-  }
-
-  var target = props && props.slot;
-  if (target) {
-    return this.$createElement('template', { slot: target }, nodes)
-  } else {
-    return nodes
-  }
-}
-
-/*  */
-
-/**
- * Runtime helper for resolving filters
- */
-function resolveFilter (id) {
-  return resolveAsset(this.$options, 'filters', id, true) || identity
-}
-
-/*  */
-
-function isKeyNotMatch (expect, actual) {
-  if (Array.isArray(expect)) {
-    return expect.indexOf(actual) === -1
-  } else {
-    return expect !== actual
-  }
-}
-
-/**
- * Runtime helper for checking keyCodes from config.
- * exposed as Vue.prototype._k
- * passing in eventKeyName as last argument separately for backwards compat
- */
-function checkKeyCodes (
-  eventKeyCode,
-  key,
-  builtInKeyCode,
-  eventKeyName,
-  builtInKeyName
-) {
-  var mappedKeyCode = config.keyCodes[key] || builtInKeyCode;
-  if (builtInKeyName && eventKeyName && !config.keyCodes[key]) {
-    return isKeyNotMatch(builtInKeyName, eventKeyName)
-  } else if (mappedKeyCode) {
-    return isKeyNotMatch(mappedKeyCode, eventKeyCode)
-  } else if (eventKeyName) {
-    return hyphenate(eventKeyName) !== key
-  }
-}
-
-/*  */
-
-/**
- * Runtime helper for merging v-bind="object" into a VNode's data.
- */
-function bindObjectProps (
-  data,
-  tag,
-  value,
-  asProp,
-  isSync
-) {
-  if (value) {
-    if (!isObject(value)) {
-      "production" !== 'production' && warn(
-        'v-bind without argument expects an Object or Array value',
-        this
-      );
-    } else {
-      if (Array.isArray(value)) {
-        value = toObject(value);
-      }
-      var hash;
-      var loop = function ( key ) {
-        if (
-          key === 'class' ||
-          key === 'style' ||
-          isReservedAttribute(key)
-        ) {
-          hash = data;
-        } else {
-          var type = data.attrs && data.attrs.type;
-          hash = asProp || config.mustUseProp(tag, type, key)
-            ? data.domProps || (data.domProps = {})
-            : data.attrs || (data.attrs = {});
-        }
-        var camelizedKey = camelize(key);
-        if (!(key in hash) && !(camelizedKey in hash)) {
-          hash[key] = value[key];
-
-          if (isSync) {
-            var on = data.on || (data.on = {});
-            on[("update:" + camelizedKey)] = function ($event) {
-              value[key] = $event;
-            };
-          }
-        }
-      };
-
-      for (var key in value) loop( key );
-    }
-  }
-  return data
-}
-
-/*  */
-
-/**
- * Runtime helper for rendering static trees.
- */
-function renderStatic (
-  index,
-  isInFor
-) {
-  var cached = this._staticTrees || (this._staticTrees = []);
-  var tree = cached[index];
-  // if has already-rendered static tree and not inside v-for,
-  // we can reuse the same tree.
-  if (tree && !isInFor) {
-    return tree
-  }
-  // otherwise, render a fresh tree.
-  tree = cached[index] = this.$options.staticRenderFns[index].call(
-    this._renderProxy,
-    null,
-    this // for render fns generated for functional component templates
-  );
-  markStatic(tree, ("__static__" + index), false);
-  return tree
-}
-
-/**
- * Runtime helper for v-once.
- * Effectively it means marking the node as static with a unique key.
- */
-function markOnce (
-  tree,
-  index,
-  key
-) {
-  markStatic(tree, ("__once__" + index + (key ? ("_" + key) : "")), true);
-  return tree
-}
-
-function markStatic (
-  tree,
-  key,
-  isOnce
-) {
-  if (Array.isArray(tree)) {
-    for (var i = 0; i < tree.length; i++) {
-      if (tree[i] && typeof tree[i] !== 'string') {
-        markStaticNode(tree[i], (key + "_" + i), isOnce);
-      }
-    }
-  } else {
-    markStaticNode(tree, key, isOnce);
-  }
-}
-
-function markStaticNode (node, key, isOnce) {
-  node.isStatic = true;
-  node.key = key;
-  node.isOnce = isOnce;
-}
-
-/*  */
-
-function bindObjectListeners (data, value) {
-  if (value) {
-    if (!isPlainObject(value)) {
-      "production" !== 'production' && warn(
-        'v-on without argument expects an Object value',
-        this
-      );
-    } else {
-      var on = data.on = data.on ? extend({}, data.on) : {};
-      for (var key in value) {
-        var existing = on[key];
-        var ours = value[key];
-        on[key] = existing ? [].concat(existing, ours) : ours;
-      }
-    }
-  }
-  return data
-}
-
-/*  */
-
-function installRenderHelpers (target) {
-  target._o = markOnce;
-  target._n = toNumber;
-  target._s = toString;
-  target._l = renderList;
-  target._t = renderSlot;
-  target._q = looseEqual;
-  target._i = looseIndexOf;
-  target._m = renderStatic;
-  target._f = resolveFilter;
-  target._k = checkKeyCodes;
-  target._b = bindObjectProps;
-  target._v = createTextVNode;
-  target._e = createEmptyVNode;
-  target._u = resolveScopedSlots;
-  target._g = bindObjectListeners;
-}
-
-/*  */
-
-function FunctionalRenderContext (
-  data,
-  props,
-  children,
-  parent,
-  Ctor
-) {
-  var options = Ctor.options;
-  // ensure the createElement function in functional components
-  // gets a unique context - this is necessary for correct named slot check
-  var contextVm;
-  if (hasOwn(parent, '_uid')) {
-    contextVm = Object.create(parent);
-    // $flow-disable-line
-    contextVm._original = parent;
-  } else {
-    // the context vm passed in is a functional context as well.
-    // in this case we want to make sure we are able to get a hold to the
-    // real context instance.
-    contextVm = parent;
-    // $flow-disable-line
-    parent = parent._original;
-  }
-  var isCompiled = isTrue(options._compiled);
-  var needNormalization = !isCompiled;
-
-  this.data = data;
-  this.props = props;
-  this.children = children;
-  this.parent = parent;
-  this.listeners = data.on || emptyObject;
-  this.injections = resolveInject(options.inject, parent);
-  this.slots = function () { return resolveSlots(children, parent); };
-
-  // support for compiled functional template
-  if (isCompiled) {
-    // exposing $options for renderStatic()
-    this.$options = options;
-    // pre-resolve slots for renderSlot()
-    this.$slots = this.slots();
-    this.$scopedSlots = data.scopedSlots || emptyObject;
-  }
-
-  if (options._scopeId) {
-    this._c = function (a, b, c, d) {
-      var vnode = createElement(contextVm, a, b, c, d, needNormalization);
-      if (vnode && !Array.isArray(vnode)) {
-        vnode.fnScopeId = options._scopeId;
-        vnode.fnContext = parent;
-      }
-      return vnode
-    };
-  } else {
-    this._c = function (a, b, c, d) { return createElement(contextVm, a, b, c, d, needNormalization); };
-  }
-}
-
-installRenderHelpers(FunctionalRenderContext.prototype);
-
-function createFunctionalComponent (
-  Ctor,
-  propsData,
-  data,
-  contextVm,
-  children
-) {
-  var options = Ctor.options;
-  var props = {};
-  var propOptions = options.props;
-  if (isDef(propOptions)) {
-    for (var key in propOptions) {
-      props[key] = validateProp(key, propOptions, propsData || emptyObject);
-    }
-  } else {
-    if (isDef(data.attrs)) { mergeProps(props, data.attrs); }
-    if (isDef(data.props)) { mergeProps(props, data.props); }
-  }
-
-  var renderContext = new FunctionalRenderContext(
-    data,
-    props,
-    children,
-    contextVm,
-    Ctor
-  );
-
-  var vnode = options.render.call(null, renderContext._c, renderContext);
-
-  if (vnode instanceof VNode) {
-    return cloneAndMarkFunctionalResult(vnode, data, renderContext.parent, options, renderContext)
-  } else if (Array.isArray(vnode)) {
-    var vnodes = normalizeChildren(vnode) || [];
-    var res = new Array(vnodes.length);
-    for (var i = 0; i < vnodes.length; i++) {
-      res[i] = cloneAndMarkFunctionalResult(vnodes[i], data, renderContext.parent, options, renderContext);
-    }
-    return res
-  }
-}
-
-function cloneAndMarkFunctionalResult (vnode, data, contextVm, options, renderContext) {
-  // #7817 clone node before setting fnContext, otherwise if the node is reused
-  // (e.g. it was from a cached normal slot) the fnContext causes named slots
-  // that should not be matched to match.
-  var clone = cloneVNode(vnode);
-  clone.fnContext = contextVm;
-  clone.fnOptions = options;
-  if (false) {
-    (clone.devtoolsMeta = clone.devtoolsMeta || {}).renderContext = renderContext;
-  }
-  if (data.slot) {
-    (clone.data || (clone.data = {})).slot = data.slot;
-  }
-  return clone
-}
-
-function mergeProps (to, from) {
-  for (var key in from) {
-    to[camelize(key)] = from[key];
-  }
-}
-
-/*  */
-
-/*  */
-
-/*  */
-
-/*  */
-
-// inline hooks to be invoked on component VNodes during patch
-var componentVNodeHooks = {
-  init: function init (vnode, hydrating) {
-    if (
-      vnode.componentInstance &&
-      !vnode.componentInstance._isDestroyed &&
-      vnode.data.keepAlive
-    ) {
-      // kept-alive components, treat as a patch
-      var mountedNode = vnode; // work around flow
-      componentVNodeHooks.prepatch(mountedNode, mountedNode);
-    } else {
-      var child = vnode.componentInstance = createComponentInstanceForVnode(
-        vnode,
-        activeInstance
-      );
-      child.$mount(hydrating ? vnode.elm : undefined, hydrating);
-    }
-  },
-
-  prepatch: function prepatch (oldVnode, vnode) {
-    var options = vnode.componentOptions;
-    var child = vnode.componentInstance = oldVnode.componentInstance;
-    updateChildComponent(
-      child,
-      options.propsData, // updated props
-      options.listeners, // updated listeners
-      vnode, // new parent vnode
-      options.children // new children
-    );
-  },
-
-  insert: function insert (vnode) {
-    var context = vnode.context;
-    var componentInstance = vnode.componentInstance;
-    if (!componentInstance._isMounted) {
-      componentInstance._isMounted = true;
-      callHook(componentInstance, 'mounted');
-    }
-    if (vnode.data.keepAlive) {
-      if (context._isMounted) {
-        // vue-router#1212
-        // During updates, a kept-alive component's child components may
-        // change, so directly walking the tree here may call activated hooks
-        // on incorrect children. Instead we push them into a queue which will
-        // be processed after the whole patch process ended.
-        queueActivatedComponent(componentInstance);
-      } else {
-        activateChildComponent(componentInstance, true /* direct */);
-      }
-    }
-  },
-
-  destroy: function destroy (vnode) {
-    var componentInstance = vnode.componentInstance;
-    if (!componentInstance._isDestroyed) {
-      if (!vnode.data.keepAlive) {
-        componentInstance.$destroy();
-      } else {
-        deactivateChildComponent(componentInstance, true /* direct */);
-      }
-    }
-  }
-};
-
-var hooksToMerge = Object.keys(componentVNodeHooks);
-
-function createComponent (
-  Ctor,
-  data,
-  context,
-  children,
-  tag
-) {
-  if (isUndef(Ctor)) {
-    return
-  }
-
-  var baseCtor = context.$options._base;
-
-  // plain options object: turn it into a constructor
-  if (isObject(Ctor)) {
-    Ctor = baseCtor.extend(Ctor);
-  }
-
-  // if at this stage it's not a constructor or an async component factory,
-  // reject.
-  if (typeof Ctor !== 'function') {
-    if (false) {
-      warn(("Invalid Component definition: " + (String(Ctor))), context);
-    }
-    return
-  }
-
-  // async component
-  var asyncFactory;
-  if (isUndef(Ctor.cid)) {
-    asyncFactory = Ctor;
-    Ctor = resolveAsyncComponent(asyncFactory, baseCtor, context);
-    if (Ctor === undefined) {
-      // return a placeholder node for async component, which is rendered
-      // as a comment node but preserves all the raw information for the node.
-      // the information will be used for async server-rendering and hydration.
-      return createAsyncPlaceholder(
-        asyncFactory,
-        data,
-        context,
-        children,
-        tag
-      )
-    }
-  }
-
-  data = data || {};
-
-  // resolve constructor options in case global mixins are applied after
-  // component constructor creation
-  resolveConstructorOptions(Ctor);
-
-  // transform component v-model data into props & events
-  if (isDef(data.model)) {
-    transformModel(Ctor.options, data);
-  }
-
-  // extract props
-  var propsData = extractPropsFromVNodeData(data, Ctor, tag);
-
-  // functional component
-  if (isTrue(Ctor.options.functional)) {
-    return createFunctionalComponent(Ctor, propsData, data, context, children)
-  }
-
-  // extract listeners, since these needs to be treated as
-  // child component listeners instead of DOM listeners
-  var listeners = data.on;
-  // replace with listeners with .native modifier
-  // so it gets processed during parent component patch.
-  data.on = data.nativeOn;
-
-  if (isTrue(Ctor.options.abstract)) {
-    // abstract components do not keep anything
-    // other than props & listeners & slot
-
-    // work around flow
-    var slot = data.slot;
-    data = {};
-    if (slot) {
-      data.slot = slot;
-    }
-  }
-
-  // install component management hooks onto the placeholder node
-  installComponentHooks(data);
-
-  // return a placeholder vnode
-  var name = Ctor.options.name || tag;
-  var vnode = new VNode(
-    ("vue-component-" + (Ctor.cid) + (name ? ("-" + name) : '')),
-    data, undefined, undefined, undefined, context,
-    { Ctor: Ctor, propsData: propsData, listeners: listeners, tag: tag, children: children },
-    asyncFactory
-  );
-
-  return vnode
-}
-
-function createComponentInstanceForVnode (
-  vnode, // we know it's MountedComponentVNode but flow doesn't
-  parent // activeInstance in lifecycle state
-) {
-  var options = {
-    _isComponent: true,
-    _parentVnode: vnode,
-    parent: parent
-  };
-  // check inline-template render functions
-  var inlineTemplate = vnode.data.inlineTemplate;
-  if (isDef(inlineTemplate)) {
-    options.render = inlineTemplate.render;
-    options.staticRenderFns = inlineTemplate.staticRenderFns;
-  }
-  return new vnode.componentOptions.Ctor(options)
-}
-
-function installComponentHooks (data) {
-  var hooks = data.hook || (data.hook = {});
-  for (var i = 0; i < hooksToMerge.length; i++) {
-    var key = hooksToMerge[i];
-    var existing = hooks[key];
-    var toMerge = componentVNodeHooks[key];
-    if (existing !== toMerge && !(existing && existing._merged)) {
-      hooks[key] = existing ? mergeHook$1(toMerge, existing) : toMerge;
-    }
-  }
-}
-
-function mergeHook$1 (f1, f2) {
-  var merged = function (a, b) {
-    // flow complains about extra args which is why we use any
-    f1(a, b);
-    f2(a, b);
-  };
-  merged._merged = true;
-  return merged
-}
-
-// transform component v-model info (value and callback) into
-// prop and event handler respectively.
-function transformModel (options, data) {
-  var prop = (options.model && options.model.prop) || 'value';
-  var event = (options.model && options.model.event) || 'input'
-  ;(data.props || (data.props = {}))[prop] = data.model.value;
-  var on = data.on || (data.on = {});
-  var existing = on[event];
-  var callback = data.model.callback;
-  if (isDef(existing)) {
-    if (
-      Array.isArray(existing)
-        ? existing.indexOf(callback) === -1
-        : existing !== callback
-    ) {
-      on[event] = [callback].concat(existing);
-    }
-  } else {
-    on[event] = callback;
-  }
-}
-
-/*  */
-
-var SIMPLE_NORMALIZE = 1;
-var ALWAYS_NORMALIZE = 2;
-
-// wrapper function for providing a more flexible interface
-// without getting yelled at by flow
-function createElement (
-  context,
-  tag,
-  data,
-  children,
-  normalizationType,
-  alwaysNormalize
-) {
-  if (Array.isArray(data) || isPrimitive(data)) {
-    normalizationType = children;
-    children = data;
-    data = undefined;
-  }
-  if (isTrue(alwaysNormalize)) {
-    normalizationType = ALWAYS_NORMALIZE;
-  }
-  return _createElement(context, tag, data, children, normalizationType)
-}
-
-function _createElement (
-  context,
-  tag,
-  data,
-  children,
-  normalizationType
-) {
-  if (isDef(data) && isDef((data).__ob__)) {
-    "production" !== 'production' && warn(
-      "Avoid using observed data object as vnode data: " + (JSON.stringify(data)) + "\n" +
-      'Always create fresh vnode data objects in each render!',
-      context
-    );
-    return createEmptyVNode()
-  }
-  // object syntax in v-bind
-  if (isDef(data) && isDef(data.is)) {
-    tag = data.is;
-  }
-  if (!tag) {
-    // in case of component :is set to falsy value
-    return createEmptyVNode()
-  }
-  // warn against non-primitive key
-  if (false
-  ) {
-    {
-      warn(
-        'Avoid using non-primitive value as key, ' +
-        'use string/number value instead.',
-        context
-      );
-    }
-  }
-  // support single function children as default scoped slot
-  if (Array.isArray(children) &&
-    typeof children[0] === 'function'
-  ) {
-    data = data || {};
-    data.scopedSlots = { default: children[0] };
-    children.length = 0;
-  }
-  if (normalizationType === ALWAYS_NORMALIZE) {
-    children = normalizeChildren(children);
-  } else if (normalizationType === SIMPLE_NORMALIZE) {
-    children = simpleNormalizeChildren(children);
-  }
-  var vnode, ns;
-  if (typeof tag === 'string') {
-    var Ctor;
-    ns = (context.$vnode && context.$vnode.ns) || config.getTagNamespace(tag);
-    if (config.isReservedTag(tag)) {
-      // platform built-in elements
-      vnode = new VNode(
-        config.parsePlatformTagName(tag), data, children,
-        undefined, undefined, context
-      );
-    } else if ((!data || !data.pre) && isDef(Ctor = resolveAsset(context.$options, 'components', tag))) {
-      // component
-      vnode = createComponent(Ctor, data, context, children, tag);
-    } else {
-      // unknown or unlisted namespaced elements
-      // check at runtime because it may get assigned a namespace when its
-      // parent normalizes children
-      vnode = new VNode(
-        tag, data, children,
-        undefined, undefined, context
-      );
-    }
-  } else {
-    // direct component options / constructor
-    vnode = createComponent(tag, data, context, children);
-  }
-  if (Array.isArray(vnode)) {
-    return vnode
-  } else if (isDef(vnode)) {
-    if (isDef(ns)) { applyNS(vnode, ns); }
-    if (isDef(data)) { registerDeepBindings(data); }
-    return vnode
-  } else {
-    return createEmptyVNode()
-  }
-}
-
-function applyNS (vnode, ns, force) {
-  vnode.ns = ns;
-  if (vnode.tag === 'foreignObject') {
-    // use default namespace inside foreignObject
-    ns = undefined;
-    force = true;
-  }
-  if (isDef(vnode.children)) {
-    for (var i = 0, l = vnode.children.length; i < l; i++) {
-      var child = vnode.children[i];
-      if (isDef(child.tag) && (
-        isUndef(child.ns) || (isTrue(force) && child.tag !== 'svg'))) {
-        applyNS(child, ns, force);
-      }
-    }
-  }
-}
-
-// ref #5318
-// necessary to ensure parent re-render when deep bindings like :style and
-// :class are used on slot nodes
-function registerDeepBindings (data) {
-  if (isObject(data.style)) {
-    traverse(data.style);
-  }
-  if (isObject(data.class)) {
-    traverse(data.class);
-  }
-}
-
-/*  */
-
-function initRender (vm) {
-  vm._vnode = null; // the root of the child tree
-  vm._staticTrees = null; // v-once cached trees
-  var options = vm.$options;
-  var parentVnode = vm.$vnode = options._parentVnode; // the placeholder node in parent tree
-  var renderContext = parentVnode && parentVnode.context;
-  vm.$slots = resolveSlots(options._renderChildren, renderContext);
-  vm.$scopedSlots = emptyObject;
-  // bind the createElement fn to this instance
-  // so that we get proper render context inside it.
-  // args order: tag, data, children, normalizationType, alwaysNormalize
-  // internal version is used by render functions compiled from templates
-  vm._c = function (a, b, c, d) { return createElement(vm, a, b, c, d, false); };
-  // normalization is always applied for the public version, used in
-  // user-written render functions.
-  vm.$createElement = function (a, b, c, d) { return createElement(vm, a, b, c, d, true); };
-
-  // $attrs & $listeners are exposed for easier HOC creation.
-  // they need to be reactive so that HOCs using them are always updated
-  var parentData = parentVnode && parentVnode.data;
-
-  /* istanbul ignore else */
-  if (false) {
-    defineReactive$$1(vm, '$attrs', parentData && parentData.attrs || emptyObject, function () {
-      !isUpdatingChildComponent && warn("$attrs is readonly.", vm);
-    }, true);
-    defineReactive$$1(vm, '$listeners', options._parentListeners || emptyObject, function () {
-      !isUpdatingChildComponent && warn("$listeners is readonly.", vm);
-    }, true);
-  } else {
-    defineReactive$$1(vm, '$attrs', parentData && parentData.attrs || emptyObject, null, true);
-    defineReactive$$1(vm, '$listeners', options._parentListeners || emptyObject, null, true);
-  }
-}
-
-function renderMixin (Vue) {
-  // install runtime convenience helpers
-  installRenderHelpers(Vue.prototype);
-
-  Vue.prototype.$nextTick = function (fn) {
-    return nextTick(fn, this)
-  };
-
-  Vue.prototype._render = function () {
-    var vm = this;
-    var ref = vm.$options;
-    var render = ref.render;
-    var _parentVnode = ref._parentVnode;
-
-    if (_parentVnode) {
-      vm.$scopedSlots = _parentVnode.data.scopedSlots || emptyObject;
-    }
-
-    // set parent vnode. this allows render functions to have access
-    // to the data on the placeholder node.
-    vm.$vnode = _parentVnode;
-    // render self
-    var vnode;
-    try {
-      vnode = render.call(vm._renderProxy, vm.$createElement);
-    } catch (e) {
-      handleError(e, vm, "render");
-      // return error render result,
-      // or previous vnode to prevent render error causing blank component
-      /* istanbul ignore else */
-      if (false) {
-        try {
-          vnode = vm.$options.renderError.call(vm._renderProxy, vm.$createElement, e);
-        } catch (e) {
-          handleError(e, vm, "renderError");
-          vnode = vm._vnode;
-        }
-      } else {
-        vnode = vm._vnode;
-      }
-    }
-    // return empty vnode in case the render function errored out
-    if (!(vnode instanceof VNode)) {
-      if (false) {
-        warn(
-          'Multiple root nodes returned from render function. Render function ' +
-          'should return a single root node.',
-          vm
-        );
-      }
-      vnode = createEmptyVNode();
-    }
-    // set parent
-    vnode.parent = _parentVnode;
-    return vnode
-  };
-}
-
-/*  */
-
 var uid$3 = 0;
 
 function initMixin (Vue) {
@@ -4780,34 +5060,14 @@ function resolveConstructorOptions (Ctor) {
 function resolveModifiedOptions (Ctor) {
   var modified;
   var latest = Ctor.options;
-  var extended = Ctor.extendOptions;
   var sealed = Ctor.sealedOptions;
   for (var key in latest) {
     if (latest[key] !== sealed[key]) {
       if (!modified) { modified = {}; }
-      modified[key] = dedupe(latest[key], extended[key], sealed[key]);
+      modified[key] = latest[key];
     }
   }
   return modified
-}
-
-function dedupe (latest, extended, sealed) {
-  // compare latest and sealed to ensure lifecycle hooks won't be duplicated
-  // between merges
-  if (Array.isArray(latest)) {
-    var res = [];
-    sealed = Array.isArray(sealed) ? sealed : [sealed];
-    extended = Array.isArray(extended) ? extended : [extended];
-    for (var i = 0; i < latest.length; i++) {
-      // push original options and not sealed options to exclude duplicated options
-      if (extended.indexOf(latest[i]) >= 0 || sealed.indexOf(latest[i]) < 0) {
-        res.push(latest[i]);
-      }
-    }
-    return res
-  } else {
-    return latest
-  }
 }
 
 function Vue (options) {
@@ -5142,6 +5402,12 @@ function initGlobalAPI (Vue) {
   Vue.delete = del;
   Vue.nextTick = nextTick;
 
+  // 2.6 explicit observable API
+  Vue.observable = function (obj) {
+    observe(obj);
+    return obj
+  };
+
   Vue.options = Object.create(null);
   ASSET_TYPES.forEach(function (type) {
     Vue.options[type + 's'] = Object.create(null);
@@ -5177,7 +5443,7 @@ Object.defineProperty(Vue, 'FunctionalRenderContext', {
   value: FunctionalRenderContext
 });
 
-Vue.version = '2.5.21';
+Vue.version = '2.6.10';
 
 /*  */
 
@@ -5197,6 +5463,17 @@ var mustUseProp = function (tag, type, attr) {
 };
 
 var isEnumeratedAttr = makeMap('contenteditable,draggable,spellcheck');
+
+var isValidContentEditableValue = makeMap('events,caret,typing,plaintext-only');
+
+var convertEnumeratedValue = function (key, value) {
+  return isFalsyAttrValue(value) || value === 'false'
+    ? 'false'
+    // allow arbitrary string value for contenteditable
+    : key === 'contenteditable' && isValidContentEditableValue(value)
+      ? value
+      : 'true'
+};
 
 var isBooleanAttr = makeMap(
   'allowfullscreen,async,autofocus,autoplay,checked,compact,controls,declare,' +
@@ -6317,6 +6594,7 @@ function _update (oldVnode, vnode) {
     } else {
       // existing directive, update
       dir.oldValue = oldDir.value;
+      dir.oldArg = oldDir.arg;
       callHook$1(dir, 'update', vnode, oldVnode);
       if (dir.def && dir.def.componentUpdated) {
         dirsWithPostpatch.push(dir);
@@ -6460,7 +6738,7 @@ function setAttr (el, key, value) {
       el.setAttribute(key, value);
     }
   } else if (isEnumeratedAttr(key)) {
-    el.setAttribute(key, isFalsyAttrValue(value) || value === 'false' ? 'false' : 'true');
+    el.setAttribute(key, convertEnumeratedValue(key, value));
   } else if (isXlink(key)) {
     if (isFalsyAttrValue(value)) {
       el.removeAttributeNS(xlinkNS, getXlinkProp(key));
@@ -6482,8 +6760,8 @@ function baseSetAttr (el, key, value) {
     /* istanbul ignore if */
     if (
       isIE && !isIE9 &&
-      (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') &&
-      key === 'placeholder' && !el.__ieph
+      el.tagName === 'TEXTAREA' &&
+      key === 'placeholder' && value !== '' && !el.__ieph
     ) {
       var blocker = function (e) {
         e.stopImmediatePropagation();
@@ -6588,15 +6866,49 @@ function createOnceHandler$1 (event, handler, capture) {
   }
 }
 
+// #9446: Firefox <= 53 (in particular, ESR 52) has incorrect Event.timeStamp
+// implementation and does not fire microtasks in between event propagation, so
+// safe to exclude.
+var useMicrotaskFix = isUsingMicroTask && !(isFF && Number(isFF[1]) <= 53);
+
 function add$1 (
-  event,
+  name,
   handler,
   capture,
   passive
 ) {
-  handler = withMacroTask(handler);
+  // async edge case #6566: inner click event triggers patch, event handler
+  // attached to outer element during patch, and triggered again. This
+  // happens because browsers fire microtask ticks between event propagation.
+  // the solution is simple: we save the timestamp when a handler is attached,
+  // and the handler would only fire if the event passed to it was fired
+  // AFTER it was attached.
+  if (useMicrotaskFix) {
+    var attachedTimestamp = currentFlushTimestamp;
+    var original = handler;
+    handler = original._wrapper = function (e) {
+      if (
+        // no bubbling, should always fire.
+        // this is just a safety net in case event.timeStamp is unreliable in
+        // certain weird environments...
+        e.target === e.currentTarget ||
+        // event is fired after handler attachment
+        e.timeStamp >= attachedTimestamp ||
+        // bail for environments that have buggy event.timeStamp implementations
+        // #9462 iOS 9 bug: event.timeStamp is 0 after history.pushState
+        // #9681 QtWebEngine event.timeStamp is negative value
+        e.timeStamp <= 0 ||
+        // #9448 bail if event is fired in another document in a multi-page
+        // electron/nw.js app, since event.timeStamp will be using a different
+        // starting reference
+        e.target.ownerDocument !== document
+      ) {
+        return original.apply(this, arguments)
+      }
+    };
+  }
   target$1.addEventListener(
-    event,
+    name,
     handler,
     supportsPassive
       ? { capture: capture, passive: passive }
@@ -6605,14 +6917,14 @@ function add$1 (
 }
 
 function remove$2 (
-  event,
+  name,
   handler,
   capture,
   _target
 ) {
   (_target || target$1).removeEventListener(
-    event,
-    handler._withTask || handler,
+    name,
+    handler._wrapper || handler,
     capture
   );
 }
@@ -6636,6 +6948,8 @@ var events = {
 
 /*  */
 
+var svgContainer;
+
 function updateDOMProps (oldVnode, vnode) {
   if (isUndef(oldVnode.data.domProps) && isUndef(vnode.data.domProps)) {
     return
@@ -6650,10 +6964,11 @@ function updateDOMProps (oldVnode, vnode) {
   }
 
   for (key in oldProps) {
-    if (isUndef(props[key])) {
+    if (!(key in props)) {
       elm[key] = '';
     }
   }
+
   for (key in props) {
     cur = props[key];
     // ignore children if the node has textContent or innerHTML,
@@ -6669,7 +6984,7 @@ function updateDOMProps (oldVnode, vnode) {
       }
     }
 
-    if (key === 'value') {
+    if (key === 'value' && elm.tagName !== 'PROGRESS') {
       // store value as _value as well since
       // non-string values will be stringified
       elm._value = cur;
@@ -6678,8 +6993,29 @@ function updateDOMProps (oldVnode, vnode) {
       if (shouldUpdateValue(elm, strCur)) {
         elm.value = strCur;
       }
-    } else {
-      elm[key] = cur;
+    } else if (key === 'innerHTML' && isSVG(elm.tagName) && isUndef(elm.innerHTML)) {
+      // IE doesn't support innerHTML for SVG elements
+      svgContainer = svgContainer || document.createElement('div');
+      svgContainer.innerHTML = "<svg>" + cur + "</svg>";
+      var svg = svgContainer.firstChild;
+      while (elm.firstChild) {
+        elm.removeChild(elm.firstChild);
+      }
+      while (svg.firstChild) {
+        elm.appendChild(svg.firstChild);
+      }
+    } else if (
+      // skip the update if old and new VDOM state is the same.
+      // `value` is handled separately because the DOM value may be temporarily
+      // out of sync with VDOM state due to focus, composition and modifiers.
+      // This  #4521 by skipping the unnecesarry `checked` update.
+      cur !== oldProps[key]
+    ) {
+      // some property updates can throw
+      // e.g. `value` on <progress> w/ non-finite value
+      try {
+        elm[key] = cur;
+      } catch (e) {}
     }
   }
 }
@@ -6709,10 +7045,6 @@ function isDirtyWithModifiers (elm, newVal) {
   var value = elm.value;
   var modifiers = elm._vModifiers; // injected by v-model runtime
   if (isDef(modifiers)) {
-    if (modifiers.lazy) {
-      // inputs with lazy should only be updated when not in focus
-      return false
-    }
     if (modifiers.number) {
       return toNumber(value) !== toNumber(newVal)
     }
@@ -6807,7 +7139,7 @@ var setProp = function (el, name, val) {
   if (cssVarRE.test(name)) {
     el.style.setProperty(name, val);
   } else if (importantRE.test(val)) {
-    el.style.setProperty(name, val.replace(importantRE, ''), 'important');
+    el.style.setProperty(hyphenate(name), val.replace(importantRE, ''), 'important');
   } else {
     var normalizedName = normalize(name);
     if (Array.isArray(val)) {
@@ -7184,8 +7516,8 @@ function enter (vnode, toggleDisplay) {
   var context = activeInstance;
   var transitionNode = activeInstance.$vnode;
   while (transitionNode && transitionNode.parent) {
-    transitionNode = transitionNode.parent;
     context = transitionNode.context;
+    transitionNode = transitionNode.parent;
   }
 
   var isAppear = !context._isMounted || !vnode.isRootInsert;
@@ -8110,9 +8442,6 @@ if (inBrowser) {
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
-/* unused harmony export instanceCount */
-/* unused harmony export register */
-/* unused harmony export dumpRegistrations */
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__utils_boot_js__ = __webpack_require__("mMs9");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__utils_settings_js__ = __webpack_require__("TfZJ");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__ = __webpack_require__("pmVh");
@@ -8121,15 +8450,19 @@ if (inBrowser) {
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_5__elements_dom_module_js__ = __webpack_require__("TBom");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_6__property_effects_js__ = __webpack_require__("yWXA");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_7__properties_mixin_js__ = __webpack_require__("6elZ");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_8__utils_wrap_js__ = __webpack_require__("ptGG");
 /**
-@license
-Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
-The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
-The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
-Code distributed by Google as part of the polymer project is also
-subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
-*/
+ * @fileoverview
+ * @suppress {checkPrototypalTypes}
+ * @license Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+ * This code may only be used under the BSD style license found at
+ * http://polymer.github.io/LICENSE.txt The complete set of authors may be found
+ * at http://polymer.github.io/AUTHORS.txt The complete set of contributors may
+ * be found at http://polymer.github.io/CONTRIBUTORS.txt Code distributed by
+ * Google as part of the polymer project is also subject to an additional IP
+ * rights grant found at http://polymer.github.io/PATENTS.txt
+ */
+
 
 
 
@@ -8144,9 +8477,11 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
  * Current Polymer version in Semver notation.
  * @type {string} Semver notation of the current version of Polymer.
  */
-const version = '3.0.5';
+const version = '3.2.0';
 /* unused harmony export version */
 
+
+const builtCSS = window.ShadyCSS && window.ShadyCSS['cssBuild'];
 
 /**
  * Element class mixin that provides the core API for Polymer's meta-programming
@@ -8217,12 +8552,11 @@ const version = '3.0.5';
  * meta-programming features.
  */
 const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /* dedupingMixin */])(base => {
-
   /**
    * @constructor
-   * @extends {base}
    * @implements {Polymer_PropertyEffects}
    * @implements {Polymer_PropertiesMixin}
+   * @extends {HTMLElement}
    * @private
    */
   const polymerElementBase = Object(__WEBPACK_IMPORTED_MODULE_7__properties_mixin_js__["a" /* PropertiesMixin */])(Object(__WEBPACK_IMPORTED_MODULE_6__property_effects_js__["a" /* PropertyEffects */])(base));
@@ -8263,9 +8597,11 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
   function ownObservers(constructor) {
     if (!constructor.hasOwnProperty(
       JSCompiler_renameProperty('__ownObservers', constructor))) {
-        constructor.__ownObservers =
-        constructor.hasOwnProperty(JSCompiler_renameProperty('observers', constructor)) ?
-        /** @type {PolymerElementConstructor} */ (constructor).observers : null;
+      constructor.__ownObservers =
+          constructor.hasOwnProperty(
+              JSCompiler_renameProperty('observers', constructor)) ?
+          /** @type {PolymerElementConstructor} */ (constructor).observers :
+          null;
     }
     return constructor.__ownObservers;
   }
@@ -8317,7 +8653,6 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
    * disables the effect, the setter would fail unexpectedly.
    * Based on feedback, we may want to try to make effects more malleable
    * and/or provide an advanced api for manipulating them.
-   * Also consider adding warnings when an effect cannot be changed.
    *
    * @param {!PolymerElement} proto Element class prototype to add accessors
    *   and effects to
@@ -8339,17 +8674,27 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
     // setup where multiple triggers for setting a property)
     // While we do have `hasComputedEffect` this is set on the property's
     // dependencies rather than itself.
-    if (info.computed && !proto._hasReadOnlyEffect(name)) {
-      proto._createComputedProperty(name, info.computed, allProps);
+    if (info.computed) {
+      if (proto._hasReadOnlyEffect(name)) {
+        console.warn(`Cannot redefine computed property '${name}'.`);
+      } else {
+        proto._createComputedProperty(name, info.computed, allProps);
+      }
     }
     if (info.readOnly && !proto._hasReadOnlyEffect(name)) {
       proto._createReadOnlyProperty(name, !info.computed);
+    } else if (info.readOnly === false && proto._hasReadOnlyEffect(name)) {
+      console.warn(`Cannot make readOnly property '${name}' non-readOnly.`);
     }
     if (info.reflectToAttribute && !proto._hasReflectEffect(name)) {
       proto._createReflectedProperty(name);
+    } else if (info.reflectToAttribute === false && proto._hasReflectEffect(name)) {
+      console.warn(`Cannot make reflected property '${name}' non-reflected.`);
     }
     if (info.notify && !proto._hasNotifyEffect(name)) {
       proto._createNotifyingProperty(name);
+    } else if (info.notify === false && proto._hasNotifyEffect(name)) {
+      console.warn(`Cannot make notify property '${name}' non-notify.`);
     }
     // always add observer
     if (info.observer) {
@@ -8370,31 +8715,33 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
    * @private
    */
   function processElementStyles(klass, template, is, baseURI) {
-    const templateStyles = template.content.querySelectorAll('style');
-    const stylesWithImports = Object(__WEBPACK_IMPORTED_MODULE_3__utils_style_gather_js__["b" /* stylesFromTemplate */])(template);
-    // insert styles from <link rel="import" type="css"> at the top of the template
-    const linkedStyles = Object(__WEBPACK_IMPORTED_MODULE_3__utils_style_gather_js__["a" /* stylesFromModuleImports */])(is);
-    const firstTemplateChild = template.content.firstElementChild;
-    for (let idx = 0; idx < linkedStyles.length; idx++) {
-      let s = linkedStyles[idx];
-      s.textContent = klass._processStyleText(s.textContent, baseURI);
-      template.content.insertBefore(s, firstTemplateChild);
-    }
-    // keep track of the last "concrete" style in the template we have encountered
-    let templateStyleIndex = 0;
-    // ensure all gathered styles are actually in this template.
-    for (let i = 0; i < stylesWithImports.length; i++) {
-      let s = stylesWithImports[i];
-      let templateStyle = templateStyles[templateStyleIndex];
-      // if the style is not in this template, it's been "included" and
-      // we put a clone of it in the template before the style that included it
-      if (templateStyle !== s) {
-        s = s.cloneNode(true);
-        templateStyle.parentNode.insertBefore(s, templateStyle);
-      } else {
-        templateStyleIndex++;
+    if (!builtCSS) {
+      const templateStyles = template.content.querySelectorAll('style');
+      const stylesWithImports = Object(__WEBPACK_IMPORTED_MODULE_3__utils_style_gather_js__["b" /* stylesFromTemplate */])(template);
+      // insert styles from <link rel="import" type="css"> at the top of the template
+      const linkedStyles = Object(__WEBPACK_IMPORTED_MODULE_3__utils_style_gather_js__["a" /* stylesFromModuleImports */])(is);
+      const firstTemplateChild = template.content.firstElementChild;
+      for (let idx = 0; idx < linkedStyles.length; idx++) {
+        let s = linkedStyles[idx];
+        s.textContent = klass._processStyleText(s.textContent, baseURI);
+        template.content.insertBefore(s, firstTemplateChild);
       }
-      s.textContent = klass._processStyleText(s.textContent, baseURI);
+      // keep track of the last "concrete" style in the template we have encountered
+      let templateStyleIndex = 0;
+      // ensure all gathered styles are actually in this template.
+      for (let i = 0; i < stylesWithImports.length; i++) {
+        let s = stylesWithImports[i];
+        let templateStyle = templateStyles[templateStyleIndex];
+        // if the style is not in this template, it's been "included" and
+        // we put a clone of it in the template before the style that included it
+        if (templateStyle !== s) {
+          s = s.cloneNode(true);
+          templateStyle.parentNode.insertBefore(s, templateStyle);
+        } else {
+          templateStyleIndex++;
+        }
+        s.textContent = klass._processStyleText(s.textContent, baseURI);
+      }
     }
     if (window.ShadyCSS) {
       window.ShadyCSS.prepareTemplate(template, is);
@@ -8404,8 +8751,8 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
   /**
    * Look up template from dom-module for element
    *
-   * @param {!string} is Element name to look up
-   * @return {!HTMLTemplateElement} Template found in dom module, or
+   * @param {string} is Element name to look up
+   * @return {?HTMLTemplateElement|undefined} Template found in dom module, or
    *   undefined if not found
    * @protected
    */
@@ -8413,11 +8760,12 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
     let template = null;
     // Under strictTemplatePolicy in 3.x+, dom-module lookup is only allowed
     // when opted-in via allowTemplateFromDomModule
-    if (is && (!__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["d" /* strictTemplatePolicy */] || __WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["a" /* allowTemplateFromDomModule */])) {
-      template = __WEBPACK_IMPORTED_MODULE_5__elements_dom_module_js__["a" /* DomModule */].import(is, 'template');
+    if (is && (!__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["e" /* strictTemplatePolicy */] || __WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["a" /* allowTemplateFromDomModule */])) {
+      template = /** @type {?HTMLTemplateElement} */ (
+          __WEBPACK_IMPORTED_MODULE_5__elements_dom_module_js__["a" /* DomModule */].import(is, 'template'));
       // Under strictTemplatePolicy, require any element with an `is`
       // specified to have a dom-module
-      if (__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["d" /* strictTemplatePolicy */] && !template) {
+      if (__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["e" /* strictTemplatePolicy */] && !template) {
         throw new Error(`strictTemplatePolicy: expecting dom-module or null template for ${is}`);
       }
     }
@@ -8429,6 +8777,7 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
    * @mixinClass
    * @unrestricted
    * @implements {Polymer_ElementMixin}
+   * @extends {polymerElementBase}
    */
   class PolymerElement extends polymerElementBase {
 
@@ -8445,26 +8794,25 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      * find the template.
      * @return {void}
      * @protected
-     * @override
      * @suppress {missingProperties} Interfaces in closure do not inherit statics, but classes do
      */
-   static _finalizeClass() {
+    static _finalizeClass() {
       super._finalizeClass();
-      if (this.hasOwnProperty(
-        JSCompiler_renameProperty('is', this)) &&  this.is) {
-        register(this.prototype);
-      }
       const observers = ownObservers(this);
       if (observers) {
         this.createObservers(observers, this._properties);
       }
+      this._prepareTemplate();
+    }
+
+    static _prepareTemplate() {
       // note: create "working" template that is finalized at instance time
       let template = /** @type {PolymerElementConstructor} */ (this).template;
       if (template) {
         if (typeof template === 'string') {
           console.error('template getter must return HTMLTemplateElement');
           template = null;
-        } else {
+        } else if (!__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["b" /* legacyOptimizations */]) {
           template = template.cloneNode(true);
         }
       }
@@ -8475,11 +8823,11 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
     /**
      * Override of PropertiesChanged createProperties to create accessors
      * and property effects for all of the properties.
+     * @param {!Object} props .
      * @return {void}
      * @protected
-     * @override
      */
-     static createProperties(props) {
+    static createProperties(props) {
       for (let p in props) {
         createPropertyFromConfig(this.prototype, p, props[p], props);
       }
@@ -8636,17 +8984,16 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      *
      * @return {void}
      * @override
-     * @suppress {invalidCasts}
+     * @suppress {invalidCasts,missingProperties} go/missingfnprops
      */
     _initializeProperties() {
-      instanceCount++;
       this.constructor.finalize();
       // note: finalize template when we have access to `localName` to
       // avoid dependence on `is` for polyfilling styling.
       this.constructor._finalizeTemplate(/** @type {!HTMLElement} */(this).localName);
       super._initializeProperties();
       // set path defaults
-      this.rootPath = __WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["b" /* rootPath */];
+      this.rootPath = __WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["c" /* rootPath */];
       this.importPath = this.constructor.importPath;
       // apply property defaults...
       let p$ = propertyDefaults(this.constructor);
@@ -8715,7 +9062,9 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      * flushes any pending properties, and updates shimmed CSS properties
      * when using the ShadyCSS scoping/custom properties polyfill.
      *
-     * @suppress {missingProperties, invalidCasts} Super may or may not implement the callback
+     * @override
+     * @suppress {missingProperties, invalidCasts} Super may or may not
+     *     implement the callback
      * @return {void}
      */
     connectedCallback() {
@@ -8767,19 +9116,24 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      * However, this method may be overridden to allow an element
      * to put its dom in another location.
      *
+     * @override
      * @throws {Error}
      * @suppress {missingReturn}
      * @param {StampedTemplate} dom to attach to the element.
      * @return {ShadowRoot} node to which the dom has been attached.
      */
     _attachDom(dom) {
-      if (this.attachShadow) {
+      const n = Object(__WEBPACK_IMPORTED_MODULE_8__utils_wrap_js__["a" /* wrap */])(this);
+      if (n.attachShadow) {
         if (dom) {
-          if (!this.shadowRoot) {
-            this.attachShadow({mode: 'open'});
+          if (!n.shadowRoot) {
+            n.attachShadow({mode: 'open'});
           }
-          this.shadowRoot.appendChild(dom);
-          return this.shadowRoot;
+          n.shadowRoot.appendChild(dom);
+          if (__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["f" /* syncInitialRender */] && window.ShadyDOM) {
+            ShadyDOM.flushInitial(n.shadowRoot);
+          }
+          return n.shadowRoot;
         }
         return null;
       } else {
@@ -8806,6 +9160,7 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      * Note: This function does not support updating CSS mixins.
      * You can not dynamically change the value of an `@apply`.
      *
+     * @override
      * @param {Object=} properties Bag of custom property key/values to
      *   apply to this element.
      * @return {void}
@@ -8827,6 +9182,7 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
      * with `/` (absolute URLs) or `#` (hash identifiers).  For general purpose
      * URL resolution, use `window.URL`.
      *
+     * @override
      * @param {string} url URL to resolve.
      * @param {string=} base Optional base URL to resolve against, defaults
      * to the element's `importPath`
@@ -8840,17 +9196,47 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
     }
 
     /**
-     * Overrides `PropertyAccessors` to add map of dynamic functions on
+     * Overrides `PropertyEffects` to add map of dynamic functions on
      * template info, for consumption by `PropertyEffects` template binding
      * code. This map determines which method templates should have accessors
      * created for them.
      *
-     * @override
+     * @param {!HTMLTemplateElement} template Template
+     * @param {!TemplateInfo} templateInfo Template metadata for current template
+     * @param {!NodeInfo} nodeInfo Node metadata for current template.
+     * @return {boolean} .
      * @suppress {missingProperties} Interfaces in closure do not inherit statics, but classes do
      */
     static _parseTemplateContent(template, templateInfo, nodeInfo) {
       templateInfo.dynamicFns = templateInfo.dynamicFns || this._properties;
       return super._parseTemplateContent(template, templateInfo, nodeInfo);
+    }
+
+    /**
+     * Overrides `PropertyEffects` to warn on use of undeclared properties in
+     * template.
+     *
+     * @param {Object} templateInfo Template metadata to add effect to
+     * @param {string} prop Property that should trigger the effect
+     * @param {Object=} effect Effect metadata object
+     * @return {void}
+     * @protected
+     * @suppress {missingProperties} Interfaces in closure do not inherit statics, but classes do
+     */
+    static _addTemplatePropertyEffect(templateInfo, prop, effect) {
+      // Warn if properties are used in template without being declared.
+      // Properties must be listed in `properties` to be included in
+      // `observedAttributes` since CE V1 reads that at registration time, and
+      // since we want to keep template parsing lazy, we can't automatically
+      // add undeclared properties used in templates to `observedAttributes`.
+      // The warning is only enabled in `legacyOptimizations` mode, since
+      // we don't want to spam existing users who might have adopted the
+      // shorthand when attribute deserialization is not important.
+      if (__WEBPACK_IMPORTED_MODULE_1__utils_settings_js__["b" /* legacyOptimizations */] && !(prop in this._properties)) {
+        console.warn(`Property '${prop}' used in template but not declared in 'properties'; ` +
+          `attribute will not be observed.`);
+      }
+      return super._addTemplatePropertyEffect(templateInfo, prop, effect);
     }
 
   }
@@ -8859,48 +9245,6 @@ const ElementMixin = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /*
 });
 /* harmony export (immutable) */ __webpack_exports__["a"] = ElementMixin;
 
-
-/**
- * Total number of Polymer element instances created.
- * @type {number}
- */
-let instanceCount = 0;
-
-/**
- * Array of Polymer element classes that have been finalized.
- * @type {Array<PolymerElement>}
- */
-const registrations = [];
-/* unused harmony export registrations */
-
-
-/**
- * @param {!PolymerElementConstructor} prototype Element prototype to log
- * @this {this}
- * @private
- */
-function _regLog(prototype) {
-  console.log('[' + prototype.is + ']: registered');
-}
-
-/**
- * Registers a class prototype for telemetry purposes.
- * @param {HTMLElement} prototype Element prototype to register
- * @this {this}
- * @protected
- */
-function register(prototype) {
-  registrations.push(prototype);
-}
-
-/**
- * Logs all elements registered with an `is` to the console.
- * @public
- * @this {this}
- */
-function dumpRegistrations() {
-  registrations.forEach(_regLog);
-}
 
 /**
  * When using the ShadyCSS scoping and custom property shim, causes all
@@ -11636,34 +11980,7 @@ exports.clearImmediate = (typeof self !== "undefined" && self.clearImmediate) ||
 /***/ (function(module, exports) {
 
 (function(){
-'use strict';var aa=new Set("annotation-xml color-profile font-face font-face-src font-face-uri font-face-format font-face-name missing-glyph".split(" "));function g(b){var a=aa.has(b);b=/^[a-z][.0-9_a-z]*-[\-.0-9_a-z]*$/.test(b);return!a&&b}function l(b){var a=b.isConnected;if(void 0!==a)return a;for(;b&&!(b.__CE_isImportDocument||b instanceof Document);)b=b.parentNode||(window.ShadowRoot&&b instanceof ShadowRoot?b.host:void 0);return!(!b||!(b.__CE_isImportDocument||b instanceof Document))}
-function p(b,a){for(;a&&a!==b&&!a.nextSibling;)a=a.parentNode;return a&&a!==b?a.nextSibling:null}
-function q(b,a,d){d=void 0===d?new Set:d;for(var c=b;c;){if(c.nodeType===Node.ELEMENT_NODE){var e=c;a(e);var f=e.localName;if("link"===f&&"import"===e.getAttribute("rel")){c=e.import;if(c instanceof Node&&!d.has(c))for(d.add(c),c=c.firstChild;c;c=c.nextSibling)q(c,a,d);c=p(b,e);continue}else if("template"===f){c=p(b,e);continue}if(e=e.__CE_shadowRoot)for(e=e.firstChild;e;e=e.nextSibling)q(e,a,d)}c=c.firstChild?c.firstChild:p(b,c)}}function t(b,a,d){b[a]=d};function u(){this.a=new Map;this.f=new Map;this.c=[];this.b=!1}function ba(b,a,d){b.a.set(a,d);b.f.set(d.constructorFunction,d)}function v(b,a){b.b=!0;b.c.push(a)}function w(b,a){b.b&&q(a,function(a){return x(b,a)})}function x(b,a){if(b.b&&!a.__CE_patched){a.__CE_patched=!0;for(var d=0;d<b.c.length;d++)b.c[d](a)}}function y(b,a){var d=[];q(a,function(a){return d.push(a)});for(a=0;a<d.length;a++){var c=d[a];1===c.__CE_state?b.connectedCallback(c):z(b,c)}}
-function A(b,a){var d=[];q(a,function(a){return d.push(a)});for(a=0;a<d.length;a++){var c=d[a];1===c.__CE_state&&b.disconnectedCallback(c)}}
-function B(b,a,d){d=void 0===d?{}:d;var c=d.u||new Set,e=d.h||function(a){return z(b,a)},f=[];q(a,function(a){if("link"===a.localName&&"import"===a.getAttribute("rel")){var d=a.import;d instanceof Node&&(d.__CE_isImportDocument=!0,d.__CE_hasRegistry=!0);d&&"complete"===d.readyState?d.__CE_documentLoadHandled=!0:a.addEventListener("load",function(){var d=a.import;if(!d.__CE_documentLoadHandled){d.__CE_documentLoadHandled=!0;var f=new Set(c);f.delete(d);B(b,d,{u:f,h:e})}})}else f.push(a)},c);if(b.b)for(a=
-0;a<f.length;a++)x(b,f[a]);for(a=0;a<f.length;a++)e(f[a])}
-function z(b,a){if(void 0===a.__CE_state){var d=a.ownerDocument;if(d.defaultView||d.__CE_isImportDocument&&d.__CE_hasRegistry)if(d=b.a.get(a.localName)){d.constructionStack.push(a);var c=d.constructorFunction;try{try{if(new c!==a)throw Error("The custom element constructor did not produce the element being upgraded.");}finally{d.constructionStack.pop()}}catch(m){throw a.__CE_state=2,m;}a.__CE_state=1;a.__CE_definition=d;if(d.attributeChangedCallback)for(d=d.observedAttributes,c=0;c<d.length;c++){var e=
-d[c],f=a.getAttribute(e);null!==f&&b.attributeChangedCallback(a,e,null,f,null)}l(a)&&b.connectedCallback(a)}}}u.prototype.connectedCallback=function(b){var a=b.__CE_definition;a.connectedCallback&&a.connectedCallback.call(b)};u.prototype.disconnectedCallback=function(b){var a=b.__CE_definition;a.disconnectedCallback&&a.disconnectedCallback.call(b)};
-u.prototype.attributeChangedCallback=function(b,a,d,c,e){var f=b.__CE_definition;f.attributeChangedCallback&&-1<f.observedAttributes.indexOf(a)&&f.attributeChangedCallback.call(b,a,d,c,e)};function C(b){var a=document;this.c=b;this.a=a;this.b=void 0;B(this.c,this.a);"loading"===this.a.readyState&&(this.b=new MutationObserver(this.f.bind(this)),this.b.observe(this.a,{childList:!0,subtree:!0}))}function D(b){b.b&&b.b.disconnect()}C.prototype.f=function(b){var a=this.a.readyState;"interactive"!==a&&"complete"!==a||D(this);for(a=0;a<b.length;a++)for(var d=b[a].addedNodes,c=0;c<d.length;c++)B(this.c,d[c])};function ca(){var b=this;this.b=this.a=void 0;this.c=new Promise(function(a){b.b=a;b.a&&a(b.a)})}function E(b){if(b.a)throw Error("Already resolved.");b.a=void 0;b.b&&b.b(void 0)};function F(b){this.c=!1;this.a=b;this.j=new Map;this.f=function(a){return a()};this.b=!1;this.i=[];this.o=new C(b)}
-F.prototype.l=function(b,a){var d=this;if(!(a instanceof Function))throw new TypeError("Custom element constructors must be functions.");if(!g(b))throw new SyntaxError("The element name '"+b+"' is not valid.");if(this.a.a.get(b))throw Error("A custom element with name '"+b+"' has already been defined.");if(this.c)throw Error("A custom element is already being defined.");this.c=!0;try{var c=function(a){var b=e[a];if(void 0!==b&&!(b instanceof Function))throw Error("The '"+a+"' callback must be a function.");
-return b},e=a.prototype;if(!(e instanceof Object))throw new TypeError("The custom element constructor's prototype is not an object.");var f=c("connectedCallback");var m=c("disconnectedCallback");var k=c("adoptedCallback");var h=c("attributeChangedCallback");var n=a.observedAttributes||[]}catch(r){return}finally{this.c=!1}a={localName:b,constructorFunction:a,connectedCallback:f,disconnectedCallback:m,adoptedCallback:k,attributeChangedCallback:h,observedAttributes:n,constructionStack:[]};ba(this.a,
-b,a);this.i.push(a);this.b||(this.b=!0,this.f(function(){return da(d)}))};F.prototype.h=function(b){B(this.a,b)};
-function da(b){if(!1!==b.b){b.b=!1;for(var a=b.i,d=[],c=new Map,e=0;e<a.length;e++)c.set(a[e].localName,[]);B(b.a,document,{h:function(a){if(void 0===a.__CE_state){var e=a.localName,f=c.get(e);f?f.push(a):b.a.a.get(e)&&d.push(a)}}});for(e=0;e<d.length;e++)z(b.a,d[e]);for(;0<a.length;){var f=a.shift();e=f.localName;f=c.get(f.localName);for(var m=0;m<f.length;m++)z(b.a,f[m]);(e=b.j.get(e))&&E(e)}}}F.prototype.get=function(b){if(b=this.a.a.get(b))return b.constructorFunction};
-F.prototype.m=function(b){if(!g(b))return Promise.reject(new SyntaxError("'"+b+"' is not a valid custom element name."));var a=this.j.get(b);if(a)return a.c;a=new ca;this.j.set(b,a);this.a.a.get(b)&&!this.i.some(function(a){return a.localName===b})&&E(a);return a.c};F.prototype.s=function(b){D(this.o);var a=this.f;this.f=function(d){return b(function(){return a(d)})}};window.CustomElementRegistry=F;F.prototype.define=F.prototype.l;F.prototype.upgrade=F.prototype.h;F.prototype.get=F.prototype.get;
-F.prototype.whenDefined=F.prototype.m;F.prototype.polyfillWrapFlushCallback=F.prototype.s;var G=window.Document.prototype.createElement,H=window.Document.prototype.createElementNS,ea=window.Document.prototype.importNode,fa=window.Document.prototype.prepend,ha=window.Document.prototype.append,ia=window.DocumentFragment.prototype.prepend,ja=window.DocumentFragment.prototype.append,I=window.Node.prototype.cloneNode,J=window.Node.prototype.appendChild,K=window.Node.prototype.insertBefore,L=window.Node.prototype.removeChild,M=window.Node.prototype.replaceChild,N=Object.getOwnPropertyDescriptor(window.Node.prototype,
-"textContent"),O=window.Element.prototype.attachShadow,P=Object.getOwnPropertyDescriptor(window.Element.prototype,"innerHTML"),Q=window.Element.prototype.getAttribute,R=window.Element.prototype.setAttribute,S=window.Element.prototype.removeAttribute,T=window.Element.prototype.getAttributeNS,U=window.Element.prototype.setAttributeNS,ka=window.Element.prototype.removeAttributeNS,la=window.Element.prototype.insertAdjacentElement,ma=window.Element.prototype.insertAdjacentHTML,na=window.Element.prototype.prepend,
-oa=window.Element.prototype.append,V=window.Element.prototype.before,pa=window.Element.prototype.after,qa=window.Element.prototype.replaceWith,ra=window.Element.prototype.remove,sa=window.HTMLElement,W=Object.getOwnPropertyDescriptor(window.HTMLElement.prototype,"innerHTML"),ta=window.HTMLElement.prototype.insertAdjacentElement,ua=window.HTMLElement.prototype.insertAdjacentHTML;var va=new function(){};function wa(){var b=X;window.HTMLElement=function(){function a(){var a=this.constructor,c=b.f.get(a);if(!c)throw Error("The custom element being constructed was not registered with `customElements`.");var e=c.constructionStack;if(0===e.length)return e=G.call(document,c.localName),Object.setPrototypeOf(e,a.prototype),e.__CE_state=1,e.__CE_definition=c,x(b,e),e;c=e.length-1;var f=e[c];if(f===va)throw Error("The HTMLElement constructor was either called reentrantly for this constructor or called multiple times.");
-e[c]=va;Object.setPrototypeOf(f,a.prototype);x(b,f);return f}a.prototype=sa.prototype;Object.defineProperty(a.prototype,"constructor",{writable:!0,configurable:!0,enumerable:!1,value:a});return a}()};function Y(b,a,d){function c(a){return function(d){for(var e=[],c=0;c<arguments.length;++c)e[c]=arguments[c];c=[];for(var f=[],n=0;n<e.length;n++){var r=e[n];r instanceof Element&&l(r)&&f.push(r);if(r instanceof DocumentFragment)for(r=r.firstChild;r;r=r.nextSibling)c.push(r);else c.push(r)}a.apply(this,e);for(e=0;e<f.length;e++)A(b,f[e]);if(l(this))for(e=0;e<c.length;e++)f=c[e],f instanceof Element&&y(b,f)}}void 0!==d.g&&(a.prepend=c(d.g));void 0!==d.append&&(a.append=c(d.append))};function xa(){var b=X;t(Document.prototype,"createElement",function(a){if(this.__CE_hasRegistry){var d=b.a.get(a);if(d)return new d.constructorFunction}a=G.call(this,a);x(b,a);return a});t(Document.prototype,"importNode",function(a,d){a=ea.call(this,a,!!d);this.__CE_hasRegistry?B(b,a):w(b,a);return a});t(Document.prototype,"createElementNS",function(a,d){if(this.__CE_hasRegistry&&(null===a||"http://www.w3.org/1999/xhtml"===a)){var c=b.a.get(d);if(c)return new c.constructorFunction}a=H.call(this,a,
-d);x(b,a);return a});Y(b,Document.prototype,{g:fa,append:ha})};function ya(){function b(b,c){Object.defineProperty(b,"textContent",{enumerable:c.enumerable,configurable:!0,get:c.get,set:function(b){if(this.nodeType===Node.TEXT_NODE)c.set.call(this,b);else{var d=void 0;if(this.firstChild){var e=this.childNodes,k=e.length;if(0<k&&l(this)){d=Array(k);for(var h=0;h<k;h++)d[h]=e[h]}}c.set.call(this,b);if(d)for(b=0;b<d.length;b++)A(a,d[b])}}})}var a=X;t(Node.prototype,"insertBefore",function(b,c){if(b instanceof DocumentFragment){var e=Array.prototype.slice.apply(b.childNodes);
-b=K.call(this,b,c);if(l(this))for(c=0;c<e.length;c++)y(a,e[c]);return b}e=l(b);c=K.call(this,b,c);e&&A(a,b);l(this)&&y(a,b);return c});t(Node.prototype,"appendChild",function(b){if(b instanceof DocumentFragment){var c=Array.prototype.slice.apply(b.childNodes);b=J.call(this,b);if(l(this))for(var e=0;e<c.length;e++)y(a,c[e]);return b}c=l(b);e=J.call(this,b);c&&A(a,b);l(this)&&y(a,b);return e});t(Node.prototype,"cloneNode",function(b){b=I.call(this,!!b);this.ownerDocument.__CE_hasRegistry?B(a,b):w(a,
-b);return b});t(Node.prototype,"removeChild",function(b){var c=l(b),e=L.call(this,b);c&&A(a,b);return e});t(Node.prototype,"replaceChild",function(b,c){if(b instanceof DocumentFragment){var e=Array.prototype.slice.apply(b.childNodes);b=M.call(this,b,c);if(l(this))for(A(a,c),c=0;c<e.length;c++)y(a,e[c]);return b}e=l(b);var f=M.call(this,b,c),d=l(this);d&&A(a,c);e&&A(a,b);d&&y(a,b);return f});N&&N.get?b(Node.prototype,N):v(a,function(a){b(a,{enumerable:!0,configurable:!0,get:function(){for(var b=[],
-a=0;a<this.childNodes.length;a++)b.push(this.childNodes[a].textContent);return b.join("")},set:function(b){for(;this.firstChild;)L.call(this,this.firstChild);J.call(this,document.createTextNode(b))}})})};function za(b){function a(a){return function(e){for(var c=[],d=0;d<arguments.length;++d)c[d]=arguments[d];d=[];for(var k=[],h=0;h<c.length;h++){var n=c[h];n instanceof Element&&l(n)&&k.push(n);if(n instanceof DocumentFragment)for(n=n.firstChild;n;n=n.nextSibling)d.push(n);else d.push(n)}a.apply(this,c);for(c=0;c<k.length;c++)A(b,k[c]);if(l(this))for(c=0;c<d.length;c++)k=d[c],k instanceof Element&&y(b,k)}}var d=Element.prototype;void 0!==V&&(d.before=a(V));void 0!==V&&(d.after=a(pa));void 0!==qa&&
-t(d,"replaceWith",function(a){for(var c=[],d=0;d<arguments.length;++d)c[d]=arguments[d];d=[];for(var m=[],k=0;k<c.length;k++){var h=c[k];h instanceof Element&&l(h)&&m.push(h);if(h instanceof DocumentFragment)for(h=h.firstChild;h;h=h.nextSibling)d.push(h);else d.push(h)}k=l(this);qa.apply(this,c);for(c=0;c<m.length;c++)A(b,m[c]);if(k)for(A(b,this),c=0;c<d.length;c++)m=d[c],m instanceof Element&&y(b,m)});void 0!==ra&&t(d,"remove",function(){var a=l(this);ra.call(this);a&&A(b,this)})};function Aa(){function b(a,b){Object.defineProperty(a,"innerHTML",{enumerable:b.enumerable,configurable:!0,get:b.get,set:function(a){var d=this,e=void 0;l(this)&&(e=[],q(this,function(a){a!==d&&e.push(a)}));b.set.call(this,a);if(e)for(var f=0;f<e.length;f++){var m=e[f];1===m.__CE_state&&c.disconnectedCallback(m)}this.ownerDocument.__CE_hasRegistry?B(c,this):w(c,this);return a}})}function a(a,b){t(a,"insertAdjacentElement",function(a,d){var e=l(d);a=b.call(this,a,d);e&&A(c,d);l(a)&&y(c,d);return a})}
-function d(a,b){function d(a,b){for(var d=[];a!==b;a=a.nextSibling)d.push(a);for(b=0;b<d.length;b++)B(c,d[b])}t(a,"insertAdjacentHTML",function(a,c){a=a.toLowerCase();if("beforebegin"===a){var e=this.previousSibling;b.call(this,a,c);d(e||this.parentNode.firstChild,this)}else if("afterbegin"===a)e=this.firstChild,b.call(this,a,c),d(this.firstChild,e);else if("beforeend"===a)e=this.lastChild,b.call(this,a,c),d(e||this.firstChild,null);else if("afterend"===a)e=this.nextSibling,b.call(this,a,c),d(this.nextSibling,
-e);else throw new SyntaxError("The value provided ("+String(a)+") is not one of 'beforebegin', 'afterbegin', 'beforeend', or 'afterend'.");})}var c=X;O&&t(Element.prototype,"attachShadow",function(a){return this.__CE_shadowRoot=a=O.call(this,a)});P&&P.get?b(Element.prototype,P):W&&W.get?b(HTMLElement.prototype,W):v(c,function(a){b(a,{enumerable:!0,configurable:!0,get:function(){return I.call(this,!0).innerHTML},set:function(a){var b="template"===this.localName,c=b?this.content:this,d=H.call(document,
-this.namespaceURI,this.localName);for(d.innerHTML=a;0<c.childNodes.length;)L.call(c,c.childNodes[0]);for(a=b?d.content:d;0<a.childNodes.length;)J.call(c,a.childNodes[0])}})});t(Element.prototype,"setAttribute",function(a,b){if(1!==this.__CE_state)return R.call(this,a,b);var d=Q.call(this,a);R.call(this,a,b);b=Q.call(this,a);c.attributeChangedCallback(this,a,d,b,null)});t(Element.prototype,"setAttributeNS",function(a,b,d){if(1!==this.__CE_state)return U.call(this,a,b,d);var e=T.call(this,a,b);U.call(this,
-a,b,d);d=T.call(this,a,b);c.attributeChangedCallback(this,b,e,d,a)});t(Element.prototype,"removeAttribute",function(a){if(1!==this.__CE_state)return S.call(this,a);var b=Q.call(this,a);S.call(this,a);null!==b&&c.attributeChangedCallback(this,a,b,null,null)});t(Element.prototype,"removeAttributeNS",function(a,b){if(1!==this.__CE_state)return ka.call(this,a,b);var d=T.call(this,a,b);ka.call(this,a,b);var e=T.call(this,a,b);d!==e&&c.attributeChangedCallback(this,b,d,e,a)});ta?a(HTMLElement.prototype,
-ta):la?a(Element.prototype,la):console.warn("Custom Elements: `Element#insertAdjacentElement` was not patched.");ua?d(HTMLElement.prototype,ua):ma?d(Element.prototype,ma):console.warn("Custom Elements: `Element#insertAdjacentHTML` was not patched.");Y(c,Element.prototype,{g:na,append:oa});za(c)};/*
+/*
 
  Copyright (c) 2016 The Polymer Project Authors. All rights reserved.
  This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
@@ -11672,7 +11989,34 @@ ta):la?a(Element.prototype,la):console.warn("Custom Elements: `Element#insertAdj
  Code distributed by Google as part of the polymer project is also
  subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
-var Z=window.customElements;if(!Z||Z.forcePolyfill||"function"!=typeof Z.define||"function"!=typeof Z.get){var X=new u;wa();xa();Y(X,DocumentFragment.prototype,{g:ia,append:ja});ya();Aa();document.__CE_hasRegistry=!0;var customElements=new F(X);Object.defineProperty(window,"customElements",{configurable:!0,enumerable:!0,value:customElements})};
+'use strict';var aa=new Set("annotation-xml color-profile font-face font-face-src font-face-uri font-face-format font-face-name missing-glyph".split(" "));function g(a){var b=aa.has(a);a=/^[a-z][.0-9_a-z]*-[\-.0-9_a-z]*$/.test(a);return!b&&a}function l(a){var b=a.isConnected;if(void 0!==b)return b;for(;a&&!(a.__CE_isImportDocument||a instanceof Document);)a=a.parentNode||(window.ShadowRoot&&a instanceof ShadowRoot?a.host:void 0);return!(!a||!(a.__CE_isImportDocument||a instanceof Document))}
+function n(a,b){for(;b&&b!==a&&!b.nextSibling;)b=b.parentNode;return b&&b!==a?b.nextSibling:null}
+function p(a,b,d){d=void 0===d?new Set:d;for(var c=a;c;){if(c.nodeType===Node.ELEMENT_NODE){var e=c;b(e);var f=e.localName;if("link"===f&&"import"===e.getAttribute("rel")){c=e.import;if(c instanceof Node&&!d.has(c))for(d.add(c),c=c.firstChild;c;c=c.nextSibling)p(c,b,d);c=n(a,e);continue}else if("template"===f){c=n(a,e);continue}if(e=e.__CE_shadowRoot)for(e=e.firstChild;e;e=e.nextSibling)p(e,b,d)}c=c.firstChild?c.firstChild:n(a,c)}}function r(a,b,d){a[b]=d};function u(){this.a=new Map;this.g=new Map;this.c=[];this.f=[];this.b=!1}function ba(a,b,d){a.a.set(b,d);a.g.set(d.constructorFunction,d)}function ca(a,b){a.b=!0;a.c.push(b)}function da(a,b){a.b=!0;a.f.push(b)}function v(a,b){a.b&&p(b,function(b){return w(a,b)})}function w(a,b){if(a.b&&!b.__CE_patched){b.__CE_patched=!0;for(var d=0;d<a.c.length;d++)a.c[d](b);for(d=0;d<a.f.length;d++)a.f[d](b)}}
+function x(a,b){var d=[];p(b,function(b){return d.push(b)});for(b=0;b<d.length;b++){var c=d[b];1===c.__CE_state?a.connectedCallback(c):y(a,c)}}function z(a,b){var d=[];p(b,function(b){return d.push(b)});for(b=0;b<d.length;b++){var c=d[b];1===c.__CE_state&&a.disconnectedCallback(c)}}
+function A(a,b,d){d=void 0===d?{}:d;var c=d.u||new Set,e=d.i||function(b){return y(a,b)},f=[];p(b,function(b){if("link"===b.localName&&"import"===b.getAttribute("rel")){var d=b.import;d instanceof Node&&(d.__CE_isImportDocument=!0,d.__CE_hasRegistry=!0);d&&"complete"===d.readyState?d.__CE_documentLoadHandled=!0:b.addEventListener("load",function(){var d=b.import;if(!d.__CE_documentLoadHandled){d.__CE_documentLoadHandled=!0;var f=new Set(c);f.delete(d);A(a,d,{u:f,i:e})}})}else f.push(b)},c);if(a.b)for(b=
+0;b<f.length;b++)w(a,f[b]);for(b=0;b<f.length;b++)e(f[b])}
+function y(a,b){if(void 0===b.__CE_state){var d=b.ownerDocument;if(d.defaultView||d.__CE_isImportDocument&&d.__CE_hasRegistry)if(d=a.a.get(b.localName)){d.constructionStack.push(b);var c=d.constructorFunction;try{try{if(new c!==b)throw Error("The custom element constructor did not produce the element being upgraded.");}finally{d.constructionStack.pop()}}catch(t){throw b.__CE_state=2,t;}b.__CE_state=1;b.__CE_definition=d;if(d.attributeChangedCallback)for(d=d.observedAttributes,c=0;c<d.length;c++){var e=
+d[c],f=b.getAttribute(e);null!==f&&a.attributeChangedCallback(b,e,null,f,null)}l(b)&&a.connectedCallback(b)}}}u.prototype.connectedCallback=function(a){var b=a.__CE_definition;b.connectedCallback&&b.connectedCallback.call(a)};u.prototype.disconnectedCallback=function(a){var b=a.__CE_definition;b.disconnectedCallback&&b.disconnectedCallback.call(a)};
+u.prototype.attributeChangedCallback=function(a,b,d,c,e){var f=a.__CE_definition;f.attributeChangedCallback&&-1<f.observedAttributes.indexOf(b)&&f.attributeChangedCallback.call(a,b,d,c,e)};function B(a){var b=document;this.c=a;this.a=b;this.b=void 0;A(this.c,this.a);"loading"===this.a.readyState&&(this.b=new MutationObserver(this.f.bind(this)),this.b.observe(this.a,{childList:!0,subtree:!0}))}function C(a){a.b&&a.b.disconnect()}B.prototype.f=function(a){var b=this.a.readyState;"interactive"!==b&&"complete"!==b||C(this);for(b=0;b<a.length;b++)for(var d=a[b].addedNodes,c=0;c<d.length;c++)A(this.c,d[c])};function ea(){var a=this;this.b=this.a=void 0;this.c=new Promise(function(b){a.b=b;a.a&&b(a.a)})}function D(a){if(a.a)throw Error("Already resolved.");a.a=void 0;a.b&&a.b(void 0)};function E(a){this.c=!1;this.a=a;this.j=new Map;this.f=function(b){return b()};this.b=!1;this.g=[];this.o=new B(a)}
+E.prototype.l=function(a,b){var d=this;if(!(b instanceof Function))throw new TypeError("Custom element constructors must be functions.");if(!g(a))throw new SyntaxError("The element name '"+a+"' is not valid.");if(this.a.a.get(a))throw Error("A custom element with name '"+a+"' has already been defined.");if(this.c)throw Error("A custom element is already being defined.");this.c=!0;try{var c=function(b){var a=e[b];if(void 0!==a&&!(a instanceof Function))throw Error("The '"+b+"' callback must be a function.");
+return a},e=b.prototype;if(!(e instanceof Object))throw new TypeError("The custom element constructor's prototype is not an object.");var f=c("connectedCallback");var t=c("disconnectedCallback");var k=c("adoptedCallback");var h=c("attributeChangedCallback");var m=b.observedAttributes||[]}catch(q){return}finally{this.c=!1}b={localName:a,constructorFunction:b,connectedCallback:f,disconnectedCallback:t,adoptedCallback:k,attributeChangedCallback:h,observedAttributes:m,constructionStack:[]};ba(this.a,
+a,b);this.g.push(b);this.b||(this.b=!0,this.f(function(){return fa(d)}))};E.prototype.i=function(a){A(this.a,a)};
+function fa(a){if(!1!==a.b){a.b=!1;for(var b=a.g,d=[],c=new Map,e=0;e<b.length;e++)c.set(b[e].localName,[]);A(a.a,document,{i:function(b){if(void 0===b.__CE_state){var e=b.localName,f=c.get(e);f?f.push(b):a.a.a.get(e)&&d.push(b)}}});for(e=0;e<d.length;e++)y(a.a,d[e]);for(;0<b.length;){var f=b.shift();e=f.localName;f=c.get(f.localName);for(var t=0;t<f.length;t++)y(a.a,f[t]);(e=a.j.get(e))&&D(e)}}}E.prototype.get=function(a){if(a=this.a.a.get(a))return a.constructorFunction};
+E.prototype.m=function(a){if(!g(a))return Promise.reject(new SyntaxError("'"+a+"' is not a valid custom element name."));var b=this.j.get(a);if(b)return b.c;b=new ea;this.j.set(a,b);this.a.a.get(a)&&!this.g.some(function(b){return b.localName===a})&&D(b);return b.c};E.prototype.s=function(a){C(this.o);var b=this.f;this.f=function(d){return a(function(){return b(d)})}};window.CustomElementRegistry=E;E.prototype.define=E.prototype.l;E.prototype.upgrade=E.prototype.i;E.prototype.get=E.prototype.get;
+E.prototype.whenDefined=E.prototype.m;E.prototype.polyfillWrapFlushCallback=E.prototype.s;var F=window.Document.prototype.createElement,G=window.Document.prototype.createElementNS,ha=window.Document.prototype.importNode,ia=window.Document.prototype.prepend,ja=window.Document.prototype.append,ka=window.DocumentFragment.prototype.prepend,la=window.DocumentFragment.prototype.append,H=window.Node.prototype.cloneNode,I=window.Node.prototype.appendChild,J=window.Node.prototype.insertBefore,K=window.Node.prototype.removeChild,L=window.Node.prototype.replaceChild,M=Object.getOwnPropertyDescriptor(window.Node.prototype,
+"textContent"),N=window.Element.prototype.attachShadow,O=Object.getOwnPropertyDescriptor(window.Element.prototype,"innerHTML"),P=window.Element.prototype.getAttribute,Q=window.Element.prototype.setAttribute,R=window.Element.prototype.removeAttribute,S=window.Element.prototype.getAttributeNS,T=window.Element.prototype.setAttributeNS,U=window.Element.prototype.removeAttributeNS,ma=window.Element.prototype.insertAdjacentElement,na=window.Element.prototype.insertAdjacentHTML,oa=window.Element.prototype.prepend,
+pa=window.Element.prototype.append,V=window.Element.prototype.before,qa=window.Element.prototype.after,ra=window.Element.prototype.replaceWith,sa=window.Element.prototype.remove,ta=window.HTMLElement,W=Object.getOwnPropertyDescriptor(window.HTMLElement.prototype,"innerHTML"),ua=window.HTMLElement.prototype.insertAdjacentElement,va=window.HTMLElement.prototype.insertAdjacentHTML;var wa=new function(){};function xa(){var a=X;window.HTMLElement=function(){function b(){var b=this.constructor,c=a.g.get(b);if(!c)throw Error("The custom element being constructed was not registered with `customElements`.");var e=c.constructionStack;if(0===e.length)return e=F.call(document,c.localName),Object.setPrototypeOf(e,b.prototype),e.__CE_state=1,e.__CE_definition=c,w(a,e),e;c=e.length-1;var f=e[c];if(f===wa)throw Error("The HTMLElement constructor was either called reentrantly for this constructor or called multiple times.");
+e[c]=wa;Object.setPrototypeOf(f,b.prototype);w(a,f);return f}b.prototype=ta.prototype;Object.defineProperty(b.prototype,"constructor",{writable:!0,configurable:!0,enumerable:!1,value:b});return b}()};function Y(a,b,d){function c(b){return function(d){for(var e=[],c=0;c<arguments.length;++c)e[c]=arguments[c];c=[];for(var f=[],m=0;m<e.length;m++){var q=e[m];q instanceof Element&&l(q)&&f.push(q);if(q instanceof DocumentFragment)for(q=q.firstChild;q;q=q.nextSibling)c.push(q);else c.push(q)}b.apply(this,e);for(e=0;e<f.length;e++)z(a,f[e]);if(l(this))for(e=0;e<c.length;e++)f=c[e],f instanceof Element&&x(a,f)}}void 0!==d.h&&(b.prepend=c(d.h));void 0!==d.append&&(b.append=c(d.append))};function ya(){var a=X;r(Document.prototype,"createElement",function(b){if(this.__CE_hasRegistry){var d=a.a.get(b);if(d)return new d.constructorFunction}b=F.call(this,b);w(a,b);return b});r(Document.prototype,"importNode",function(b,d){b=ha.call(this,b,!!d);this.__CE_hasRegistry?A(a,b):v(a,b);return b});r(Document.prototype,"createElementNS",function(b,d){if(this.__CE_hasRegistry&&(null===b||"http://www.w3.org/1999/xhtml"===b)){var c=a.a.get(d);if(c)return new c.constructorFunction}b=G.call(this,b,
+d);w(a,b);return b});Y(a,Document.prototype,{h:ia,append:ja})};function za(){function a(a,c){Object.defineProperty(a,"textContent",{enumerable:c.enumerable,configurable:!0,get:c.get,set:function(a){if(this.nodeType===Node.TEXT_NODE)c.set.call(this,a);else{var d=void 0;if(this.firstChild){var e=this.childNodes,k=e.length;if(0<k&&l(this)){d=Array(k);for(var h=0;h<k;h++)d[h]=e[h]}}c.set.call(this,a);if(d)for(a=0;a<d.length;a++)z(b,d[a])}}})}var b=X;r(Node.prototype,"insertBefore",function(a,c){if(a instanceof DocumentFragment){var e=Array.prototype.slice.apply(a.childNodes);
+a=J.call(this,a,c);if(l(this))for(c=0;c<e.length;c++)x(b,e[c]);return a}e=l(a);c=J.call(this,a,c);e&&z(b,a);l(this)&&x(b,a);return c});r(Node.prototype,"appendChild",function(a){if(a instanceof DocumentFragment){var c=Array.prototype.slice.apply(a.childNodes);a=I.call(this,a);if(l(this))for(var e=0;e<c.length;e++)x(b,c[e]);return a}c=l(a);e=I.call(this,a);c&&z(b,a);l(this)&&x(b,a);return e});r(Node.prototype,"cloneNode",function(a){a=H.call(this,!!a);this.ownerDocument.__CE_hasRegistry?A(b,a):v(b,
+a);return a});r(Node.prototype,"removeChild",function(a){var c=l(a),e=K.call(this,a);c&&z(b,a);return e});r(Node.prototype,"replaceChild",function(a,c){if(a instanceof DocumentFragment){var e=Array.prototype.slice.apply(a.childNodes);a=L.call(this,a,c);if(l(this))for(z(b,c),c=0;c<e.length;c++)x(b,e[c]);return a}e=l(a);var f=L.call(this,a,c),d=l(this);d&&z(b,c);e&&z(b,a);d&&x(b,a);return f});M&&M.get?a(Node.prototype,M):ca(b,function(b){a(b,{enumerable:!0,configurable:!0,get:function(){for(var a=[],
+b=0;b<this.childNodes.length;b++){var f=this.childNodes[b];f.nodeType!==Node.COMMENT_NODE&&a.push(f.textContent)}return a.join("")},set:function(a){for(;this.firstChild;)K.call(this,this.firstChild);null!=a&&""!==a&&I.call(this,document.createTextNode(a))}})})};function Aa(a){function b(b){return function(e){for(var c=[],d=0;d<arguments.length;++d)c[d]=arguments[d];d=[];for(var k=[],h=0;h<c.length;h++){var m=c[h];m instanceof Element&&l(m)&&k.push(m);if(m instanceof DocumentFragment)for(m=m.firstChild;m;m=m.nextSibling)d.push(m);else d.push(m)}b.apply(this,c);for(c=0;c<k.length;c++)z(a,k[c]);if(l(this))for(c=0;c<d.length;c++)k=d[c],k instanceof Element&&x(a,k)}}var d=Element.prototype;void 0!==V&&(d.before=b(V));void 0!==V&&(d.after=b(qa));void 0!==ra&&
+r(d,"replaceWith",function(b){for(var e=[],c=0;c<arguments.length;++c)e[c]=arguments[c];c=[];for(var d=[],k=0;k<e.length;k++){var h=e[k];h instanceof Element&&l(h)&&d.push(h);if(h instanceof DocumentFragment)for(h=h.firstChild;h;h=h.nextSibling)c.push(h);else c.push(h)}k=l(this);ra.apply(this,e);for(e=0;e<d.length;e++)z(a,d[e]);if(k)for(z(a,this),e=0;e<c.length;e++)d=c[e],d instanceof Element&&x(a,d)});void 0!==sa&&r(d,"remove",function(){var b=l(this);sa.call(this);b&&z(a,this)})};function Ba(){function a(a,b){Object.defineProperty(a,"innerHTML",{enumerable:b.enumerable,configurable:!0,get:b.get,set:function(a){var e=this,d=void 0;l(this)&&(d=[],p(this,function(a){a!==e&&d.push(a)}));b.set.call(this,a);if(d)for(var f=0;f<d.length;f++){var t=d[f];1===t.__CE_state&&c.disconnectedCallback(t)}this.ownerDocument.__CE_hasRegistry?A(c,this):v(c,this);return a}})}function b(a,b){r(a,"insertAdjacentElement",function(a,e){var d=l(e);a=b.call(this,a,e);d&&z(c,e);l(a)&&x(c,e);return a})}
+function d(a,b){function e(a,b){for(var e=[];a!==b;a=a.nextSibling)e.push(a);for(b=0;b<e.length;b++)A(c,e[b])}r(a,"insertAdjacentHTML",function(a,c){a=a.toLowerCase();if("beforebegin"===a){var d=this.previousSibling;b.call(this,a,c);e(d||this.parentNode.firstChild,this)}else if("afterbegin"===a)d=this.firstChild,b.call(this,a,c),e(this.firstChild,d);else if("beforeend"===a)d=this.lastChild,b.call(this,a,c),e(d||this.firstChild,null);else if("afterend"===a)d=this.nextSibling,b.call(this,a,c),e(this.nextSibling,
+d);else throw new SyntaxError("The value provided ("+String(a)+") is not one of 'beforebegin', 'afterbegin', 'beforeend', or 'afterend'.");})}var c=X;N&&r(Element.prototype,"attachShadow",function(a){a=N.call(this,a);var b=c;if(b.b&&!a.__CE_patched){a.__CE_patched=!0;for(var e=0;e<b.c.length;e++)b.c[e](a)}return this.__CE_shadowRoot=a});O&&O.get?a(Element.prototype,O):W&&W.get?a(HTMLElement.prototype,W):da(c,function(b){a(b,{enumerable:!0,configurable:!0,get:function(){return H.call(this,!0).innerHTML},
+set:function(a){var b="template"===this.localName,c=b?this.content:this,e=G.call(document,this.namespaceURI,this.localName);for(e.innerHTML=a;0<c.childNodes.length;)K.call(c,c.childNodes[0]);for(a=b?e.content:e;0<a.childNodes.length;)I.call(c,a.childNodes[0])}})});r(Element.prototype,"setAttribute",function(a,b){if(1!==this.__CE_state)return Q.call(this,a,b);var e=P.call(this,a);Q.call(this,a,b);b=P.call(this,a);c.attributeChangedCallback(this,a,e,b,null)});r(Element.prototype,"setAttributeNS",function(a,
+b,d){if(1!==this.__CE_state)return T.call(this,a,b,d);var e=S.call(this,a,b);T.call(this,a,b,d);d=S.call(this,a,b);c.attributeChangedCallback(this,b,e,d,a)});r(Element.prototype,"removeAttribute",function(a){if(1!==this.__CE_state)return R.call(this,a);var b=P.call(this,a);R.call(this,a);null!==b&&c.attributeChangedCallback(this,a,b,null,null)});r(Element.prototype,"removeAttributeNS",function(a,b){if(1!==this.__CE_state)return U.call(this,a,b);var d=S.call(this,a,b);U.call(this,a,b);var e=S.call(this,
+a,b);d!==e&&c.attributeChangedCallback(this,b,d,e,a)});ua?b(HTMLElement.prototype,ua):ma?b(Element.prototype,ma):console.warn("Custom Elements: `Element#insertAdjacentElement` was not patched.");va?d(HTMLElement.prototype,va):na?d(Element.prototype,na):console.warn("Custom Elements: `Element#insertAdjacentHTML` was not patched.");Y(c,Element.prototype,{h:oa,append:pa});Aa(c)};var Z=window.customElements;if(!Z||Z.forcePolyfill||"function"!=typeof Z.define||"function"!=typeof Z.get){var X=new u;xa();ya();Y(X,DocumentFragment.prototype,{h:ka,append:la});za();Ba();document.__CE_hasRegistry=!0;var customElements=new E(X);Object.defineProperty(window,"customElements",{configurable:!0,enumerable:!0,value:customElements})};
 }).call(self);
 
 //# sourceMappingURL=custom-elements.min.js.map
@@ -11686,7 +12030,8 @@ var Z=window.customElements;if(!Z||Z.forcePolyfill||"function"!=typeof Z.define|
 "use strict";
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__utils_boot_js__ = __webpack_require__("mMs9");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__ = __webpack_require__("pmVh");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__properties_changed_js__ = __webpack_require__("SGt4");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__utils_telemetry_js__ = __webpack_require__("nzqX");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__properties_changed_js__ = __webpack_require__("SGt4");
 /**
 @license
 Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
@@ -11696,6 +12041,7 @@ The complete set of contributors may be found at http://polymer.github.io/CONTRI
 Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
+
 
 
 
@@ -11743,7 +12089,7 @@ const PropertiesMixin = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
   * @implements {Polymer_PropertiesChanged}
   * @private
   */
- const base = Object(__WEBPACK_IMPORTED_MODULE_2__properties_changed_js__["a" /* PropertiesChanged */])(superClass);
+ const base = Object(__WEBPACK_IMPORTED_MODULE_3__properties_changed_js__["a" /* PropertiesChanged */])(superClass);
 
  /**
   * Returns the super class constructor for the given class, if it is an
@@ -11803,8 +12149,12 @@ const PropertiesMixin = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     * @suppress {missingProperties} Interfaces in closure do not inherit statics, but classes do
     */
    static get observedAttributes() {
-     const props = this._properties;
-     return props ? Object.keys(props).map(p => this.attributeNameForProperty(p)) : [];
+     if (!this.hasOwnProperty('__observedAttributes')) {
+       Object(__WEBPACK_IMPORTED_MODULE_2__utils_telemetry_js__["b" /* register */])(this.prototype);
+       const props = this._properties;
+       this.__observedAttributes = props ? Object.keys(props).map(p => this.attributeNameForProperty(p)) : [];
+     }
+     return this.__observedAttributes;
    }
 
    /**
@@ -11878,6 +12228,7 @@ const PropertiesMixin = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     * @return {void}
     */
    _initializeProperties() {
+     Object(__WEBPACK_IMPORTED_MODULE_2__utils_telemetry_js__["a" /* incrementInstanceCount */])();
      this.constructor.finalize();
      super._initializeProperties();
    }
@@ -12266,13 +12617,14 @@ const microTask = {
     window.customElements === undefined ||
     // The webcomponentsjs custom elements polyfill doesn't require
     // ES2015-compatible construction (`super()` or `Reflect.construct`).
-    window.customElements.hasOwnProperty('polyfillWrapFlushCallback')
+    window.customElements.polyfillWrapFlushCallback
   ) {
     return;
   }
   const BuiltInHTMLElement = HTMLElement;
-  window.HTMLElement = function HTMLElement() {
-    return Reflect.construct(BuiltInHTMLElement, [], this.constructor);
+  window.HTMLElement = /** @this {!Object} */ function HTMLElement() {
+    return Reflect.construct(
+        BuiltInHTMLElement, [], /** @type {!Function} */ (this.constructor));
   };
   HTMLElement.prototype = BuiltInHTMLElement.prototype;
   HTMLElement.prototype.constructor = HTMLElement;
@@ -12511,7 +12863,7 @@ function stylesFromModule(moduleId) {
  * Returns the `<style>` elements within a given template.
  *
  * @param {!HTMLTemplateElement} template Template to gather styles from
- * @param {string} baseURI baseURI for style content
+ * @param {string=} baseURI baseURI for style content
  * @return {!Array<!HTMLStyleElement>} Array of styles
  */
 function stylesFromTemplate(template, baseURI) {
@@ -12530,7 +12882,8 @@ function stylesFromTemplate(template, baseURI) {
         }));
       }
       if (baseURI) {
-        e.textContent = Object(__WEBPACK_IMPORTED_MODULE_1__resolve_url_js__["b" /* resolveCss */])(e.textContent, baseURI);
+        e.textContent =
+            Object(__WEBPACK_IMPORTED_MODULE_1__resolve_url_js__["b" /* resolveCss */])(e.textContent, /** @type {string} */ (baseURI));
       }
       styles.push(e);
     }
@@ -12691,6 +13044,7 @@ function _cssFromModuleImports(module) {
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__utils_boot_js__ = __webpack_require__("mMs9");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__ = __webpack_require__("pmVh");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__utils_async_js__ = __webpack_require__("CMuT");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__utils_wrap_js__ = __webpack_require__("ptGG");
 /**
 @license
 Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
@@ -12700,6 +13054,7 @@ The complete set of contributors may be found at http://polymer.github.io/CONTRI
 Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
+
 
 
 
@@ -12850,6 +13205,7 @@ const PropertiesChanged = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
 
     constructor() {
       super();
+      /** @protected {boolean} */
       this.__dataEnabled = false;
       this.__dataReady = false;
       this.__dataInvalid = false;
@@ -13114,7 +13470,7 @@ const PropertiesChanged = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * @param {string} name Name of attribute that changed
      * @param {?string} old Old attribute value
      * @param {?string} value New attribute value
-     * @param {?string} namespace Attribute namespace.
+     * @param {?string=} namespace Attribute namespace.
      * @return {void}
      * @suppress {missingProperties} Super may or may not implement the callback
      * @override
@@ -13188,6 +13544,9 @@ const PropertiesChanged = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
       if (str === undefined) {
         node.removeAttribute(attribute);
       } else {
+        if (attribute === 'class' || attribute === 'name' || attribute === 'slot') {
+          node = /** @type {?Element} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_wrap_js__["a" /* wrap */])(node));
+        }
         node.setAttribute(attribute, str);
       }
     }
@@ -13403,7 +13762,7 @@ class DomModule extends HTMLElement {
     if (id) {
       // Under strictTemplatePolicy, reject and null out any re-registered
       // dom-module since it is ambiguous whether first-in or last-in is trusted
-      if (__WEBPACK_IMPORTED_MODULE_2__utils_settings_js__["d" /* strictTemplatePolicy */] && findModule(id) !== undefined) {
+      if (__WEBPACK_IMPORTED_MODULE_2__utils_settings_js__["e" /* strictTemplatePolicy */] && findModule(id) !== undefined) {
         setModule(id, null);
         throw new Error(`strictTemplatePolicy: dom-module ${id} re-registered`);
       }
@@ -13427,11 +13786,13 @@ customElements.define('dom-module', DomModule);
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
 "use strict";
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "b", function() { return rootPath; });
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "c", function() { return sanitizeDOMValue; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "c", function() { return rootPath; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "d", function() { return sanitizeDOMValue; });
 /* unused harmony export passiveTouchGestures */
-/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "d", function() { return strictTemplatePolicy; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "e", function() { return strictTemplatePolicy; });
 /* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "a", function() { return allowTemplateFromDomModule; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "b", function() { return legacyOptimizations; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "f", function() { return syncInitialRender; });
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__boot_js__ = __webpack_require__("mMs9");
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__resolve_url_js__ = __webpack_require__("8vJZ");
 /**
@@ -13465,8 +13826,7 @@ const useNativeCustomElements = !(window.customElements.polyfillWrapFlushCallbac
  * `rootPath` to provide a stable application mount path when
  * using client side routing.
  */
-let rootPath = undefined ||
-  Object(__WEBPACK_IMPORTED_MODULE_1__resolve_url_js__["a" /* pathFromUrl */])(document.baseURI || window.location.href);
+let rootPath = Object(__WEBPACK_IMPORTED_MODULE_1__resolve_url_js__["a" /* pathFromUrl */])(document.baseURI || window.location.href);
 
 /**
  * Sets the global rootPath property used by `ElementMixin` and
@@ -13563,7 +13923,7 @@ let allowTemplateFromDomModule = false;
 /**
  * Sets `lookupTemplateFromDomModule` globally for all elements
  *
- * @param {boolean} allowDomModule enable or disable template lookup 
+ * @param {boolean} allowDomModule enable or disable template lookup
  *   globally
  * @return {void}
  */
@@ -13571,6 +13931,49 @@ const setAllowTemplateFromDomModule = function(allowDomModule) {
   allowTemplateFromDomModule = allowDomModule;
 };
 /* unused harmony export setAllowTemplateFromDomModule */
+
+
+/**
+ * Setting to skip processing style includes and re-writing urls in css styles.
+ * Normally "included" styles are pulled into the element and all urls in styles
+ * are re-written to be relative to the containing script url.
+ * If no includes or relative urls are used in styles, these steps can be
+ * skipped as an optimization.
+ */
+let legacyOptimizations = false;
+
+/**
+ * Sets `legacyOptimizations` globally for all elements to enable optimizations
+ * when only legacy based elements are used.
+ *
+ * @param {boolean} useLegacyOptimizations enable or disable legacy optimizations
+ * includes and url rewriting
+ * @return {void}
+ */
+const setLegacyOptimizations = function(useLegacyOptimizations) {
+  legacyOptimizations = useLegacyOptimizations;
+};
+/* unused harmony export setLegacyOptimizations */
+
+
+/**
+ * Setting to perform initial rendering synchronously when running under ShadyDOM.
+ * This matches the behavior of Polymer 1.
+ */
+let syncInitialRender = false;
+
+/**
+ * Sets `syncInitialRender` globally for all elements to enable synchronous
+ * initial rendering.
+ *
+ * @param {boolean} useSyncInitialRender enable or disable synchronous initial
+ * rendering globally.
+ * @return {void}
+ */
+const setSyncInitialRender = function(useSyncInitialRender) {
+  syncInitialRender = useSyncInitialRender;
+};
+/* unused harmony export setSyncInitialRender */
 
 
 
@@ -13594,6 +13997,9 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
 
 
+
+const walker = document.createTreeWalker(document, NodeFilter.SHOW_ALL,
+    null, false);
 
 // 1.x backwards-compatible auto-wrapper for template type extensions
 // This is a clear layering violation and gives favored-nation status to
@@ -13629,7 +14035,8 @@ function findTemplateNode(root, nodeInfo) {
   if (parent) {
     // note: marginally faster than indexing via childNodes
     // (http://jsperf.com/childnodes-lookup)
-    for (let n=parent.firstChild, i=0; n; n=n.nextSibling) {
+    walker.currentNode = parent;
+    for (let n=walker.firstChild(), i=0; n; n=walker.nextSibling()) {
       if (nodeInfo.parentIndex === i++) {
         return n;
       }
@@ -13818,7 +14225,8 @@ const TemplateStamp = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a" /
         // For ShadyDom optimization, indicating there is an insertion point
         templateInfo.hasInsertionPoint = true;
       }
-      if (element.firstChild) {
+      walker.currentNode = element;
+      if (walker.firstChild()) {
         noted = this._parseTemplateChildNodes(element, templateInfo, nodeInfo) || noted;
       }
       if (element.hasAttributes && element.hasAttributes()) {
@@ -13844,7 +14252,8 @@ const TemplateStamp = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a" /
       if (root.localName === 'script' || root.localName === 'style') {
         return;
       }
-      for (let node=root.firstChild, parentIndex=0, next; node; node=next) {
+      walker.currentNode = root;
+      for (let node=walker.firstChild(), parentIndex=0, next; node; node=next) {
         // Wrap templates
         if (node.localName == 'template') {
           node = wrapTemplateExtension(node);
@@ -13853,12 +14262,13 @@ const TemplateStamp = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a" /
         // text nodes to be inexplicably split =(
         // note that root.normalize() should work but does not so we do this
         // manually.
-        next = node.nextSibling;
+        walker.currentNode = node;
+        next = walker.nextSibling();
         if (node.nodeType === Node.TEXT_NODE) {
           let /** Node */ n = next;
           while (n && (n.nodeType === Node.TEXT_NODE)) {
             node.textContent += n.textContent;
-            next = n.nextSibling;
+            next = walker.nextSibling();
             root.removeChild(n);
             n = next;
           }
@@ -13873,7 +14283,8 @@ const TemplateStamp = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a" /
           childInfo.infoIndex = templateInfo.nodeInfoList.push(/** @type {!NodeInfo} */(childInfo)) - 1;
         }
         // Increment if not removed
-        if (node.parentNode) {
+        walker.currentNode = node;
+        if (walker.parentNode()) {
           parentIndex++;
         }
       }
@@ -14248,86 +14659,89 @@ The complete set of contributors may be found at http://polymer.github.io/CONTRI
 Code distributed by Google as part of the polymer project is also
 subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 */
-'use strict';var aa="function"==typeof Object.defineProperties?Object.defineProperty:function(a,b,c){a!=Array.prototype&&a!=Object.prototype&&(a[b]=c.value)},m="undefined"!=typeof window&&window===this?this:"undefined"!=typeof global&&null!=global?global:this;function ba(){ba=function(){};m.Symbol||(m.Symbol=ca)}var ca=function(){var a=0;return function(b){return"jscomp_symbol_"+(b||"")+a++}}();
-function p(){ba();var a=m.Symbol.iterator;a||(a=m.Symbol.iterator=m.Symbol("iterator"));"function"!=typeof Array.prototype[a]&&aa(Array.prototype,a,{configurable:!0,writable:!0,value:function(){return da(this)}});p=function(){}}function da(a){var b=0;return ea(function(){return b<a.length?{done:!1,value:a[b++]}:{done:!0}})}function ea(a){p();a={next:a};a[m.Symbol.iterator]=function(){return this};return a}function q(a){p();ba();p();var b=a[Symbol.iterator];return b?b.call(a):da(a)}
-function fa(a){for(var b,c=[];!(b=a.next()).done;)c.push(b.value);return c}function t(a,b){return{index:a,m:[],v:b}}
-function ha(a,b,c,d){var e=0,f=0,h=0,g=0,k=Math.min(b-e,d-f);if(0==e&&0==f)a:{for(h=0;h<k;h++)if(a[h]!==c[h])break a;h=k}if(b==a.length&&d==c.length){g=a.length;for(var l=c.length,n=0;n<k-h&&ia(a[--g],c[--l]);)n++;g=n}e+=h;f+=h;b-=g;d-=g;if(0==b-e&&0==d-f)return[];if(e==b){for(b=t(e,0);f<d;)b.m.push(c[f++]);return[b]}if(f==d)return[t(e,b-e)];k=e;h=f;d=d-h+1;g=b-k+1;b=Array(d);for(l=0;l<d;l++)b[l]=Array(g),b[l][0]=l;for(l=0;l<g;l++)b[0][l]=l;for(l=1;l<d;l++)for(n=1;n<g;n++)if(a[k+n-1]===c[h+l-1])b[l][n]=
-b[l-1][n-1];else{var r=b[l-1][n]+1,S=b[l][n-1]+1;b[l][n]=r<S?r:S}k=b.length-1;h=b[0].length-1;d=b[k][h];for(a=[];0<k||0<h;)0==k?(a.push(2),h--):0==h?(a.push(3),k--):(g=b[k-1][h-1],l=b[k-1][h],n=b[k][h-1],r=l<n?l<g?l:g:n<g?n:g,r==g?(g==d?a.push(0):(a.push(1),d=g),k--,h--):r==l?(a.push(3),k--,d=l):(a.push(2),h--,d=n));a.reverse();b=void 0;k=[];for(h=0;h<a.length;h++)switch(a[h]){case 0:b&&(k.push(b),b=void 0);e++;f++;break;case 1:b||(b=t(e,0));b.v++;e++;b.m.push(c[f]);f++;break;case 2:b||(b=t(e,0));
-b.v++;e++;break;case 3:b||(b=t(e,0)),b.m.push(c[f]),f++}b&&k.push(b);return k}function ia(a,b){return a===b};function ja(){this.M=this.root=null;this.A=!1;this.h=this.u=this.F=this.assignedSlot=this.assignedNodes=this.i=null;this.childNodes=this.nextSibling=this.previousSibling=this.lastChild=this.firstChild=this.parentNode=this.l=void 0;this.P=this.I=!1;this.s={}}ja.prototype.toJSON=function(){return{}};function u(a){a.__shady||(a.__shady=new ja);return a.__shady}function v(a){return a&&a.__shady};var w=window.ShadyDOM||{};w.Z=!(!Element.prototype.attachShadow||!Node.prototype.getRootNode);var ka=Object.getOwnPropertyDescriptor(Node.prototype,"firstChild");w.g=!!(ka&&ka.configurable&&ka.get);w.G=w.force||!w.Z;var la=navigator.userAgent.match("Trident"),ma=navigator.userAgent.match("Edge");void 0===w.N&&(w.N=w.g&&(la||ma));function x(a){return(a=v(a))&&void 0!==a.firstChild}function y(a){return"ShadyRoot"===a.V}function z(a){a=a.getRootNode();if(y(a))return a}
-var A=Element.prototype,na=A.matches||A.matchesSelector||A.mozMatchesSelector||A.msMatchesSelector||A.oMatchesSelector||A.webkitMatchesSelector;function oa(a,b){if(a&&b)for(var c=Object.getOwnPropertyNames(b),d=0,e;d<c.length&&(e=c[d]);d++){var f=e,h=a,g=Object.getOwnPropertyDescriptor(b,f);g&&Object.defineProperty(h,f,g)}}function B(a,b){for(var c=[],d=1;d<arguments.length;++d)c[d-1]=arguments[d];for(d=0;d<c.length;d++)oa(a,c[d]);return a}function pa(a,b){for(var c in b)a[c]=b[c]}
-var qa=document.createTextNode(""),ra=0,sa=[];(new MutationObserver(function(){for(;sa.length;)try{sa.shift()()}catch(a){throw qa.textContent=ra++,a;}})).observe(qa,{characterData:!0});function ta(a){sa.push(a);qa.textContent=ra++}var ua=!!document.contains;function va(a,b){for(;b;){if(b==a)return!0;b=b.parentNode}return!1}
-function wa(a){for(var b=a.length-1;0<=b;b--){var c=a[b],d=c.getAttribute("id")||c.getAttribute("name");d&&"length"!==d&&isNaN(d)&&(a[d]=c)}a.item=function(b){return a[b]};a.namedItem=function(b){if("length"!==b&&isNaN(b)&&a[b])return a[b];for(var c=q(a),d=c.next();!d.done;d=c.next())if(d=d.value,(d.getAttribute("id")||d.getAttribute("name"))==b)return d;return null};return a};var C=[],xa;function ya(a){xa||(xa=!0,ta(D));C.push(a)}function D(){xa=!1;for(var a=!!C.length;C.length;)C.shift()();return a}D.list=C;var za=/[&\u00A0"]/g,Aa=/[&\u00A0<>]/g;function Ba(a){switch(a){case "&":return"&amp;";case "<":return"&lt;";case ">":return"&gt;";case '"':return"&quot;";case "\u00a0":return"&nbsp;"}}function Ca(a){for(var b={},c=0;c<a.length;c++)b[a[c]]=!0;return b}var Da=Ca("area base br col command embed hr img input keygen link meta param source track wbr".split(" ")),Ea=Ca("style script xmp iframe noembed noframes plaintext noscript".split(" "));
-function Fa(a,b){"template"===a.localName&&(a=a.content);for(var c="",d=b?b(a):a.childNodes,e=0,f=d.length,h;e<f&&(h=d[e]);e++){a:{var g=h;var k=a;var l=b;switch(g.nodeType){case Node.ELEMENT_NODE:for(var n=g.localName,r="<"+n,S=g.attributes,Xa=0;k=S[Xa];Xa++)r+=" "+k.name+'="'+k.value.replace(za,Ba)+'"';r+=">";g=Da[n]?r:r+Fa(g,l)+"</"+n+">";break a;case Node.TEXT_NODE:g=g.data;g=k&&Ea[k.localName]?g:g.replace(Aa,Ba);break a;case Node.COMMENT_NODE:g="\x3c!--"+g.data+"--\x3e";break a;default:throw window.console.error(g),
-Error("not implemented");}}c+=g}return c};var E=document.createTreeWalker(document,NodeFilter.SHOW_ALL,null,!1),F=document.createTreeWalker(document,NodeFilter.SHOW_ELEMENT,null,!1);function Ga(a){var b=[];E.currentNode=a;for(a=E.firstChild();a;)b.push(a),a=E.nextSibling();return b}
-var G={parentNode:function(a){E.currentNode=a;return E.parentNode()},firstChild:function(a){E.currentNode=a;return E.firstChild()},lastChild:function(a){E.currentNode=a;return E.lastChild()},previousSibling:function(a){E.currentNode=a;return E.previousSibling()},nextSibling:function(a){E.currentNode=a;return E.nextSibling()}};G.childNodes=Ga;G.parentElement=function(a){F.currentNode=a;return F.parentNode()};G.firstElementChild=function(a){F.currentNode=a;return F.firstChild()};
-G.lastElementChild=function(a){F.currentNode=a;return F.lastChild()};G.previousElementSibling=function(a){F.currentNode=a;return F.previousSibling()};G.nextElementSibling=function(a){F.currentNode=a;return F.nextSibling()};G.children=function(a){var b=[];F.currentNode=a;for(a=F.firstChild();a;)b.push(a),a=F.nextSibling();return wa(b)};G.innerHTML=function(a){return Fa(a,function(a){return Ga(a)})};
-G.textContent=function(a){switch(a.nodeType){case Node.ELEMENT_NODE:case Node.DOCUMENT_FRAGMENT_NODE:a=document.createTreeWalker(a,NodeFilter.SHOW_TEXT,null,!1);for(var b="",c;c=a.nextNode();)b+=c.nodeValue;return b;default:return a.nodeValue}};var Ha=w.g,Ia=[Node.prototype,Element.prototype,HTMLElement.prototype];function H(a){var b;a:{for(b=0;b<Ia.length;b++){var c=Ia[b];if(c.hasOwnProperty(a)){b=c;break a}}b=void 0}if(!b)throw Error("Could not find descriptor for "+a);return Object.getOwnPropertyDescriptor(b,a)}
-var I=Ha?{parentNode:H("parentNode"),firstChild:H("firstChild"),lastChild:H("lastChild"),previousSibling:H("previousSibling"),nextSibling:H("nextSibling"),childNodes:H("childNodes"),parentElement:H("parentElement"),previousElementSibling:H("previousElementSibling"),nextElementSibling:H("nextElementSibling"),innerHTML:H("innerHTML"),textContent:H("textContent"),firstElementChild:H("firstElementChild"),lastElementChild:H("lastElementChild"),children:H("children")}:{},J=Ha?{firstElementChild:Object.getOwnPropertyDescriptor(DocumentFragment.prototype,
-"firstElementChild"),lastElementChild:Object.getOwnPropertyDescriptor(DocumentFragment.prototype,"lastElementChild"),children:Object.getOwnPropertyDescriptor(DocumentFragment.prototype,"children")}:{},K=Ha?{firstElementChild:Object.getOwnPropertyDescriptor(Document.prototype,"firstElementChild"),lastElementChild:Object.getOwnPropertyDescriptor(Document.prototype,"lastElementChild"),children:Object.getOwnPropertyDescriptor(Document.prototype,"children")}:{},Ja={L:I,ia:J,da:K,parentNode:function(a){return I.parentNode.get.call(a)},
-firstChild:function(a){return I.firstChild.get.call(a)},lastChild:function(a){return I.lastChild.get.call(a)},previousSibling:function(a){return I.previousSibling.get.call(a)},nextSibling:function(a){return I.nextSibling.get.call(a)},childNodes:function(a){return Array.prototype.slice.call(I.childNodes.get.call(a))},parentElement:function(a){return I.parentElement.get.call(a)},previousElementSibling:function(a){return I.previousElementSibling.get.call(a)},nextElementSibling:function(a){return I.nextElementSibling.get.call(a)},
-innerHTML:function(a){return I.innerHTML.get.call(a)},textContent:function(a){return I.textContent.get.call(a)},children:function(a){switch(a.nodeType){case Node.DOCUMENT_FRAGMENT_NODE:return J.children.get.call(a);case Node.DOCUMENT_NODE:return K.children.get.call(a);default:return I.children.get.call(a)}},firstElementChild:function(a){switch(a.nodeType){case Node.DOCUMENT_FRAGMENT_NODE:return J.firstElementChild.get.call(a);case Node.DOCUMENT_NODE:return K.firstElementChild.get.call(a);default:return I.firstElementChild.get.call(a)}},
-lastElementChild:function(a){switch(a.nodeType){case Node.DOCUMENT_FRAGMENT_NODE:return J.lastElementChild.get.call(a);case Node.DOCUMENT_NODE:return K.lastElementChild.get.call(a);default:return I.lastElementChild.get.call(a)}}};var L=w.N?Ja:G;var Ka=Element.prototype.insertBefore,La=Element.prototype.replaceChild,Ma=Element.prototype.removeChild,Na=Element.prototype.setAttribute,Oa=Element.prototype.removeAttribute,Pa=Element.prototype.cloneNode,Qa=Document.prototype.importNode,Ra=Element.prototype.addEventListener,Sa=Element.prototype.removeEventListener,Ta=Window.prototype.addEventListener,Ua=Window.prototype.removeEventListener,Va=Element.prototype.dispatchEvent,Wa=Node.prototype.contains||HTMLElement.prototype.contains,Ya=Document.prototype.getElementById,
-Za=Element.prototype.querySelector,$a=DocumentFragment.prototype.querySelector,ab=Document.prototype.querySelector,bb=Element.prototype.querySelectorAll,cb=DocumentFragment.prototype.querySelectorAll,db=Document.prototype.querySelectorAll,M={};M.appendChild=Element.prototype.appendChild;M.insertBefore=Ka;M.replaceChild=La;M.removeChild=Ma;M.setAttribute=Na;M.removeAttribute=Oa;M.cloneNode=Pa;M.importNode=Qa;M.addEventListener=Ra;M.removeEventListener=Sa;M.$=Ta;M.aa=Ua;M.dispatchEvent=Va;
-M.contains=Wa;M.getElementById=Ya;M.ga=Za;M.ja=$a;M.ea=ab;M.querySelector=function(a){switch(this.nodeType){case Node.ELEMENT_NODE:return Za.call(this,a);case Node.DOCUMENT_NODE:return ab.call(this,a);default:return $a.call(this,a)}};M.ha=bb;M.ka=cb;M.fa=db;M.querySelectorAll=function(a){switch(this.nodeType){case Node.ELEMENT_NODE:return bb.call(this,a);case Node.DOCUMENT_NODE:return db.call(this,a);default:return cb.call(this,a)}};function eb(a){for(;a.firstChild;)a.removeChild(a.firstChild)}
-var fb=w.g,gb=document.implementation.createHTMLDocument("inert"),hb=Object.getOwnPropertyDescriptor(Node.prototype,"isConnected"),ib=hb&&hb.get,jb=Object.getOwnPropertyDescriptor(Document.prototype,"activeElement"),kb={parentElement:{get:function(){var a=v(this);(a=a&&a.parentNode)&&a.nodeType!==Node.ELEMENT_NODE&&(a=null);return void 0!==a?a:L.parentElement(this)},configurable:!0},parentNode:{get:function(){var a=v(this);a=a&&a.parentNode;return void 0!==a?a:L.parentNode(this)},configurable:!0},
-nextSibling:{get:function(){var a=v(this);a=a&&a.nextSibling;return void 0!==a?a:L.nextSibling(this)},configurable:!0},previousSibling:{get:function(){var a=v(this);a=a&&a.previousSibling;return void 0!==a?a:L.previousSibling(this)},configurable:!0},nextElementSibling:{get:function(){var a=v(this);if(a&&void 0!==a.nextSibling){for(a=this.nextSibling;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.nextSibling;return a}return L.nextElementSibling(this)},configurable:!0},previousElementSibling:{get:function(){var a=
-v(this);if(a&&void 0!==a.previousSibling){for(a=this.previousSibling;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.previousSibling;return a}return L.previousElementSibling(this)},configurable:!0}},lb={className:{get:function(){return this.getAttribute("class")||""},set:function(a){this.setAttribute("class",a)},configurable:!0}},mb={childNodes:{get:function(){if(x(this)){var a=v(this);if(!a.childNodes){a.childNodes=[];for(var b=this.firstChild;b;b=b.nextSibling)a.childNodes.push(b)}var c=a.childNodes}else c=
-L.childNodes(this);c.item=function(a){return c[a]};return c},configurable:!0},childElementCount:{get:function(){return this.children.length},configurable:!0},firstChild:{get:function(){var a=v(this);a=a&&a.firstChild;return void 0!==a?a:L.firstChild(this)},configurable:!0},lastChild:{get:function(){var a=v(this);a=a&&a.lastChild;return void 0!==a?a:L.lastChild(this)},configurable:!0},textContent:{get:function(){if(x(this)){for(var a=[],b=0,c=this.childNodes,d;d=c[b];b++)d.nodeType!==Node.COMMENT_NODE&&
-a.push(d.textContent);return a.join("")}return L.textContent(this)},set:function(a){if("undefined"===typeof a||null===a)a="";switch(this.nodeType){case Node.ELEMENT_NODE:case Node.DOCUMENT_FRAGMENT_NODE:if(!x(this)&&fb){var b=this.firstChild;(b!=this.lastChild||b&&b.nodeType!=Node.TEXT_NODE)&&eb(this);Ja.L.textContent.set.call(this,a)}else eb(this),(0<a.length||this.nodeType===Node.ELEMENT_NODE)&&this.appendChild(document.createTextNode(a));break;default:this.nodeValue=a}},configurable:!0},firstElementChild:{get:function(){var a=
-v(this);if(a&&void 0!==a.firstChild){for(a=this.firstChild;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.nextSibling;return a}return L.firstElementChild(this)},configurable:!0},lastElementChild:{get:function(){var a=v(this);if(a&&void 0!==a.lastChild){for(a=this.lastChild;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.previousSibling;return a}return L.lastElementChild(this)},configurable:!0},children:{get:function(){return x(this)?wa(Array.prototype.filter.call(this.childNodes,function(a){return a.nodeType===Node.ELEMENT_NODE})):
-L.children(this)},configurable:!0},innerHTML:{get:function(){return x(this)?Fa("template"===this.localName?this.content:this):L.innerHTML(this)},set:function(a){var b="template"===this.localName?this.content:this;eb(b);var c=this.localName||"div";c=this.namespaceURI&&this.namespaceURI!==gb.namespaceURI?gb.createElementNS(this.namespaceURI,c):gb.createElement(c);fb?Ja.L.innerHTML.set.call(c,a):c.innerHTML=a;for(a="template"===this.localName?c.content:c;a.firstChild;)b.appendChild(a.firstChild)},configurable:!0}},
-nb={shadowRoot:{get:function(){var a=v(this);return a&&a.M||null},configurable:!0}},ob={activeElement:{get:function(){var a=jb&&jb.get?jb.get.call(document):w.g?void 0:document.activeElement;if(a&&a.nodeType){var b=!!y(this);if(this===document||b&&this.host!==a&&M.contains.call(this.host,a)){for(b=z(a);b&&b!==this;)a=b.host,b=z(a);a=this===document?b?null:a:b===this?a:null}else a=null}else a=null;return a},set:function(){},configurable:!0}};
-function N(a,b,c){for(var d in b){var e=Object.getOwnPropertyDescriptor(a,d);e&&e.configurable||!e&&c?Object.defineProperty(a,d,b[d]):c&&console.warn("Could not define",d,"on",a)}}function O(a){N(a,kb);N(a,lb);N(a,mb);N(a,ob)}
-function pb(){var a=P.prototype;a.__proto__=DocumentFragment.prototype;N(a,kb,!0);N(a,mb,!0);N(a,ob,!0);Object.defineProperties(a,{nodeType:{value:Node.DOCUMENT_FRAGMENT_NODE,configurable:!0},nodeName:{value:"#document-fragment",configurable:!0},nodeValue:{value:null,configurable:!0}});["localName","namespaceURI","prefix"].forEach(function(b){Object.defineProperty(a,b,{value:void 0,configurable:!0})});["ownerDocument","baseURI","isConnected"].forEach(function(b){Object.defineProperty(a,b,{get:function(){return this.host[b]},
-configurable:!0})})}var qb=w.g?function(){}:function(a){var b=u(a);b.I||(b.I=!0,N(a,kb,!0),N(a,lb,!0))},rb=w.g?function(){}:function(a){u(a).P||(N(a,mb,!0),N(a,nb,!0))};var sb=L.childNodes;function tb(a,b,c){rb(b);var d=u(b);void 0!==d.firstChild&&(d.childNodes=null);if(a.nodeType===Node.DOCUMENT_FRAGMENT_NODE){d=a.childNodes;for(var e=0;e<d.length;e++)ub(d[e],b,c);a=u(a);b=void 0!==a.firstChild?null:void 0;a.firstChild=a.lastChild=b;a.childNodes=b}else ub(a,b,c)}
-function ub(a,b,c){qb(a);c=c||null;var d=u(a),e=u(b),f=c?u(c):null;d.previousSibling=c?f.previousSibling:b.lastChild;if(f=v(d.previousSibling))f.nextSibling=a;if(f=v(d.nextSibling=c))f.previousSibling=a;d.parentNode=b;c?c===e.firstChild&&(e.firstChild=a):(e.lastChild=a,e.firstChild||(e.firstChild=a));e.childNodes=null}
-function vb(a,b){var c=u(a);b=u(b);a===b.firstChild&&(b.firstChild=c.nextSibling);a===b.lastChild&&(b.lastChild=c.previousSibling);a=c.previousSibling;var d=c.nextSibling;a&&(u(a).nextSibling=d);d&&(u(d).previousSibling=a);c.parentNode=c.previousSibling=c.nextSibling=void 0;void 0!==b.childNodes&&(b.childNodes=null)}
-function wb(a,b){var c=u(a);if(void 0===c.firstChild)for(c.childNodes=null,b=b||sb(a),c.firstChild=b[0]||null,c.lastChild=b[b.length-1]||null,rb(a),c=0;c<b.length;c++){var d=b[c],e=u(d);e.parentNode=a;e.nextSibling=b[c+1]||null;e.previousSibling=b[c-1]||null;qb(d)}};var xb=L.parentNode,yb=L.childNodes,zb={},Q=w.deferConnectionCallbacks&&"loading"===document.readyState,R;function Ab(a){var b=[];do b.unshift(a);while(a=a.parentNode);return b}
-function P(a,b,c){if(a!==zb)throw new TypeError("Illegal constructor");this.V="ShadyRoot";this.host=b;this.Y=c&&c.mode;a=yb(b);wb(b,a);c=u(b);c.root=this;c.M="closed"!==this.Y?this:null;c=u(this);c.firstChild=c.lastChild=c.parentNode=c.nextSibling=c.previousSibling=null;c.childNodes=[];this.K=this.j=!1;this.c=this.b=this.a=null;if(w.preferPerformance){c=0;for(var d=a.length;c<d;c++)M.removeChild.call(b,a[c])}else T(this)}function T(a){a.j||(a.j=!0,ya(function(){return Bb(a)}))}
-function Bb(a){for(var b;a;){a.j&&(b=a);a:{var c=a;a=c.host.getRootNode();if(y(a))for(var d=c.host.childNodes,e=0;e<d.length;e++)if(c=d[e],"slot"==c.localName)break a;a=void 0}}b&&b._renderRoot()}
-P.prototype._renderRoot=function(){var a=Q;Q=!0;this.j=!1;if(this.a){U(this);for(var b=0,c;b<this.a.length;b++){c=this.a[b];var d=v(c),e=d.assignedNodes;d.assignedNodes=[];d.h=[];if(d.F=e)for(d=0;d<e.length;d++){var f=v(e[d]);f.u=f.assignedSlot;f.assignedSlot===c&&(f.assignedSlot=null)}}for(c=this.host.firstChild;c;c=c.nextSibling)Cb(this,c);for(b=0;b<this.a.length;b++){c=this.a[b];e=v(c);if(!e.assignedNodes.length)for(d=c.firstChild;d;d=d.nextSibling)Cb(this,d,c);(d=(d=v(c.parentNode))&&d.root)&&
-(Db(d)||d.j)&&d._renderRoot();Eb(this,e.h,e.assignedNodes);if(d=e.F){for(f=0;f<d.length;f++)v(d[f]).u=null;e.F=null;d.length>e.assignedNodes.length&&(e.A=!0)}e.A&&(e.A=!1,Fb(this,c))}b=this.a;c=[];for(e=0;e<b.length;e++)d=b[e].parentNode,(f=v(d))&&f.root||!(0>c.indexOf(d))||c.push(d);for(b=0;b<c.length;b++){e=c[b];d=e===this?this.host:e;f=[];e=e.childNodes;for(var h=0;h<e.length;h++){var g=e[h];if("slot"==g.localName){g=v(g).h;for(var k=0;k<g.length;k++)f.push(g[k])}else f.push(g)}e=void 0;h=yb(d);
-g=ha(f,f.length,h,h.length);for(var l=k=0;k<g.length&&(e=g[k]);k++){for(var n=0,r;n<e.m.length&&(r=e.m[n]);n++)xb(r)===d&&M.removeChild.call(d,r),h.splice(e.index+l,1);l-=e.v}for(l=0;l<g.length&&(e=g[l]);l++)for(k=h[e.index],n=e.index;n<e.index+e.v;n++)r=f[n],M.insertBefore.call(d,r,k),h.splice(n,0,r)}}if(!w.preferPerformance&&!this.K)for(r=this.host.childNodes,c=0,b=r.length;c<b;c++)e=r[c],d=v(e),xb(e)!==this.host||"slot"!==e.localName&&d.assignedSlot||M.removeChild.call(this.host,e);this.K=!0;Q=
-a;R&&R()};function Cb(a,b,c){var d=u(b),e=d.u;d.u=null;c||(c=(a=a.b[b.slot||"__catchall"])&&a[0]);c?(u(c).assignedNodes.push(b),d.assignedSlot=c):d.assignedSlot=void 0;e!==d.assignedSlot&&d.assignedSlot&&(u(d.assignedSlot).A=!0)}function Eb(a,b,c){for(var d=0,e;d<c.length&&(e=c[d]);d++)if("slot"==e.localName){var f=v(e).assignedNodes;f&&f.length&&Eb(a,b,f)}else b.push(c[d])}function Fb(a,b){M.dispatchEvent.call(b,new Event("slotchange"));b=v(b);b.assignedSlot&&Fb(a,b.assignedSlot)}
-function Gb(a,b){a.c=a.c||[];a.a=a.a||[];a.b=a.b||{};a.c.push.apply(a.c,b instanceof Array?b:fa(q(b)))}function U(a){if(a.c&&a.c.length){for(var b=a.c,c,d=0;d<b.length;d++){var e=b[d];wb(e);wb(e.parentNode);var f=Hb(e);a.b[f]?(c=c||{},c[f]=!0,a.b[f].push(e)):a.b[f]=[e];a.a.push(e)}if(c)for(var h in c)a.b[h]=Ib(a.b[h]);a.c=[]}}function Hb(a){var b=a.name||a.getAttribute("name")||"__catchall";return a.T=b}
-function Ib(a){return a.sort(function(a,c){a=Ab(a);for(var b=Ab(c),e=0;e<a.length;e++){c=a[e];var f=b[e];if(c!==f)return a=Array.from(c.parentNode.childNodes),a.indexOf(c)-a.indexOf(f)}})}function Jb(a,b){if(a.a){U(a);var c=a.b,d;for(d in c)for(var e=c[d],f=0;f<e.length;f++){var h=e[f];if(va(b,h)){e.splice(f,1);var g=a.a.indexOf(h);0<=g&&a.a.splice(g,1);f--;h=v(h);if(g=h.h)for(var k=0;k<g.length;k++){var l=g[k],n=xb(l);n&&M.removeChild.call(n,l)}h.h=[];h.assignedNodes=[];g=!0}}return g}}
-function Db(a){U(a);return!(!a.a||!a.a.length)}
-if(window.customElements&&w.G&&!w.preferPerformance){var V=new Map;R=function(){var a=Array.from(V);V.clear();a=q(a);for(var b=a.next();!b.done;b=a.next()){b=q(b.value);var c=b.next().value;b.next().value?c.R():c.S()}};Q&&document.addEventListener("readystatechange",function(){Q=!1;R()},{once:!0});var Kb=function(a,b,c){var d=0,e="__isConnected"+d++;if(b||c)a.prototype.connectedCallback=a.prototype.R=function(){Q?V.set(this,!0):this[e]||(this[e]=!0,b&&b.call(this))},a.prototype.disconnectedCallback=
-a.prototype.S=function(){Q?this.isConnected||V.set(this,!1):this[e]&&(this[e]=!1,c&&c.call(this))};return a},Lb=window.customElements.define;Object.defineProperty(window.CustomElementRegistry.prototype,"define",{value:function(a,b){var c=b.prototype.connectedCallback,d=b.prototype.disconnectedCallback;Lb.call(window.customElements,a,Kb(b,c,d));b.prototype.connectedCallback=c;b.prototype.disconnectedCallback=d}})};var Mb=L.parentNode,Nb=window.document,Ob=w.la;
-function Pb(a,b,c){if(a.ownerDocument!==Nb&&b.ownerDocument!==Nb)return M.insertBefore.call(a,b,c);if(b===a)throw Error("Failed to execute 'appendChild' on 'Node': The new child element contains the parent.");if(c){var d=v(c);d=d&&d.parentNode;if(void 0!==d&&d!==a||void 0===d&&Mb(c)!==a)throw Error("Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.");}if(c===b)return b;var e=[],f=Qb,h=z(a),g;h?g=h.host.localName:g=Rb(a);if(b.parentNode){var k=
-Rb(b);Sb(b.parentNode,b,!!h||!(b.getRootNode()instanceof ShadowRoot));f=function(a,b){W()&&(Tb(a,k),Qb(a,b))}}d=!0;var l=(!Ob||void 0===b.__noInsertionPoint)&&!Ub(b,g);if(h)b.__noInsertionPoint&&!l||Vb(b,function(a){"slot"===a.localName&&e.push(a);l&&f(a,g)});else if(l){var n=Rb(b);Vb(b,function(a){var b=g;W()&&(Tb(a,n),Qb(a,b))})}e.length&&Gb(h,e);("slot"===a.localName||e.length)&&h&&T(h);x(a)&&(tb(b,a,c),h=v(a),Wb(a)?(T(h.root),d=!1):h.root&&(d=!1));d?(d=y(a)?a.host:a,c?(c=Xb(c),M.insertBefore.call(d,
-b,c)):M.appendChild.call(d,b)):b.ownerDocument!==a.ownerDocument&&a.ownerDocument.adoptNode(b);Yb(a,b);return b}
-function Sb(a,b,c){c=void 0===c?!1:c;if(a.ownerDocument!==Nb)return M.removeChild.call(a,b);if(b.parentNode!==a)throw Error("The node to be removed is not a child of this node: "+b);var d=z(b),e=v(a);if(x(a)&&(vb(b,a),Wb(a))){T(e.root);var f=!0}if(W()&&!c&&d){var h=Rb(b);Vb(b,function(a){Tb(a,h)})}Zb(b);if(d){var g=a&&"slot"===a.localName;g&&(f=!0);((c=Jb(d,b))||g)&&T(d)}f||(f=y(a)?a.host:a,(!e.root&&"slot"!==b.localName||f===Mb(b))&&M.removeChild.call(f,b));Yb(a,null,b);return b}
-function Zb(a){var b=v(a);if(b&&void 0!==b.l){b=a.childNodes;for(var c=0,d=b.length,e;c<d&&(e=b[c]);c++)Zb(e)}if(a=v(a))a.l=void 0}function Xb(a){var b=a;a&&"slot"===a.localName&&(b=(b=(b=v(a))&&b.h)&&b.length?b[0]:Xb(a.nextSibling));return b}function Wb(a){return(a=(a=v(a))&&a.root)&&Db(a)}
-function $b(a,b){if("slot"===b)a=a.parentNode,Wb(a)&&T(v(a).root);else if("slot"===a.localName&&"name"===b&&(b=z(a))){if(b.a){U(b);var c=a.T,d=Hb(a);if(d!==c){c=b.b[c];var e=c.indexOf(a);0<=e&&c.splice(e,1);c=b.b[d]||(b.b[d]=[]);c.push(a);1<c.length&&(b.b[d]=Ib(c))}}T(b)}}function Yb(a,b,c){if(a=(a=v(a))&&a.i)b&&a.addedNodes.push(b),c&&a.removedNodes.push(c),ac(a)}
-function bc(a){if(a&&a.nodeType){var b=u(a),c=b.l;void 0===c&&(y(a)?(c=a,b.l=c):(c=(c=a.parentNode)?bc(c):a,M.contains.call(document.documentElement,a)&&(b.l=c)));return c}}function cc(a,b,c){var d=[];dc(a.childNodes,b,c,d);return d}function dc(a,b,c,d){for(var e=0,f=a.length,h;e<f&&(h=a[e]);e++){var g;if(g=h.nodeType===Node.ELEMENT_NODE){g=h;var k=b,l=c,n=d,r=k(g);r&&n.push(g);l&&l(r)?g=r:(dc(g.childNodes,k,l,n),g=void 0)}if(g)break}}var ec=null;
-function W(){ec||(ec=window.ShadyCSS&&window.ShadyCSS.ScopingShim);return ec||null}function fc(a,b,c){if(a.ownerDocument!==Nb)M.setAttribute.call(a,b,c);else{var d=W();d&&"class"===b?d.setElementClass(a,c):(M.setAttribute.call(a,b,c),$b(a,b))}}function gc(a,b){if(a.ownerDocument!==document||"template"===a.localName)return M.importNode.call(document,a,b);var c=M.importNode.call(document,a,!1);if(b){a=a.childNodes;b=0;for(var d;b<a.length;b++)d=gc(a[b],!0),c.appendChild(d)}return c}
-function Qb(a,b){var c=W();c&&c.scopeNode(a,b)}function Tb(a,b){var c=W();c&&c.unscopeNode(a,b)}function Ub(a,b){var c=W();if(!c)return!0;if(a.nodeType===Node.DOCUMENT_FRAGMENT_NODE){c=!0;for(var d=0;c&&d<a.childNodes.length;d++)c=c&&Ub(a.childNodes[d],b);return c}return a.nodeType!==Node.ELEMENT_NODE?!0:c.currentScopeForNode(a)===b}function Rb(a){if(a.nodeType!==Node.ELEMENT_NODE)return"";var b=W();return b?b.currentScopeForNode(a):""}
-function Vb(a,b){if(a){a.nodeType===Node.ELEMENT_NODE&&b(a);for(var c=0,d;c<a.childNodes.length;c++)d=a.childNodes[c],d.nodeType===Node.ELEMENT_NODE&&Vb(d,b)}};function hc(){this.c=!1;this.addedNodes=[];this.removedNodes=[];this.w=new Set}function ac(a){a.c||(a.c=!0,ta(function(){a.flush()}))}hc.prototype.flush=function(){if(this.c){this.c=!1;var a=this.takeRecords();a.length&&this.w.forEach(function(b){b(a)})}};hc.prototype.takeRecords=function(){if(this.addedNodes.length||this.removedNodes.length){var a=[{addedNodes:this.addedNodes,removedNodes:this.removedNodes}];this.addedNodes=[];this.removedNodes=[];return a}return[]};
-function ic(a,b){var c=u(a);c.i||(c.i=new hc);c.i.w.add(b);var d=c.i;return{U:b,X:d,W:a,takeRecords:function(){return d.takeRecords()}}}function jc(a){var b=a&&a.X;b&&(b.w.delete(a.U),b.w.size||(u(a.W).i=null))}
-function kc(a,b){var c=b.getRootNode();return a.map(function(a){var b=c===a.target.getRootNode();if(b&&a.addedNodes){if(b=Array.from(a.addedNodes).filter(function(a){return c===a.getRootNode()}),b.length)return a=Object.create(a),Object.defineProperty(a,"addedNodes",{value:b,configurable:!0}),a}else if(b)return a}).filter(function(a){return a})};var X="__eventWrappers"+Date.now(),lc=function(){var a=Object.getOwnPropertyDescriptor(Event.prototype,"composed");return a?function(b){return a.get.call(b)}:null}(),mc={blur:!0,focus:!0,focusin:!0,focusout:!0,click:!0,dblclick:!0,mousedown:!0,mouseenter:!0,mouseleave:!0,mousemove:!0,mouseout:!0,mouseover:!0,mouseup:!0,wheel:!0,beforeinput:!0,input:!0,keydown:!0,keyup:!0,compositionstart:!0,compositionupdate:!0,compositionend:!0,touchstart:!0,touchend:!0,touchmove:!0,touchcancel:!0,pointerover:!0,
-pointerenter:!0,pointerdown:!0,pointermove:!0,pointerup:!0,pointercancel:!0,pointerout:!0,pointerleave:!0,gotpointercapture:!0,lostpointercapture:!0,dragstart:!0,drag:!0,dragenter:!0,dragleave:!0,dragover:!0,drop:!0,dragend:!0,DOMActivate:!0,DOMFocusIn:!0,DOMFocusOut:!0,keypress:!0},nc={DOMAttrModified:!0,DOMAttributeNameChanged:!0,DOMCharacterDataModified:!0,DOMElementNameChanged:!0,DOMNodeInserted:!0,DOMNodeInsertedIntoDocument:!0,DOMNodeRemoved:!0,DOMNodeRemovedFromDocument:!0,DOMSubtreeModified:!0};
-function oc(a,b){var c=[],d=a;for(a=a===window?window:a.getRootNode();d;)c.push(d),d=d.assignedSlot?d.assignedSlot:d.nodeType===Node.DOCUMENT_FRAGMENT_NODE&&d.host&&(b||d!==a)?d.host:d.parentNode;c[c.length-1]===document&&c.push(window);return c}function pc(a,b){if(!y)return a;a=oc(a,!0);for(var c=0,d,e,f,h;c<b.length;c++)if(d=b[c],f=d===window?window:d.getRootNode(),f!==e&&(h=a.indexOf(f),e=f),!y(f)||-1<h)return d}
-var qc={get composed(){void 0===this.o&&(lc?this.o="focusin"===this.type||"focusout"===this.type||lc(this):!1!==this.isTrusted&&(this.o=mc[this.type]));return this.o||!1},composedPath:function(){this.H||(this.H=oc(this.__target,this.composed));return this.H},get target(){return pc(this.currentTarget||this.__previousCurrentTarget,this.composedPath())},get relatedTarget(){if(!this.C)return null;this.J||(this.J=oc(this.C,!0));return pc(this.currentTarget||this.__previousCurrentTarget,this.J)},stopPropagation:function(){Event.prototype.stopPropagation.call(this);
-this.B=!0},stopImmediatePropagation:function(){Event.prototype.stopImmediatePropagation.call(this);this.B=this.O=!0}};function rc(a){function b(b,d){b=new a(b,d);b.o=d&&!!d.composed;return b}pa(b,a);b.prototype=a.prototype;return b}var sc={focus:!0,blur:!0};function tc(a){return a.__target!==a.target||a.C!==a.relatedTarget}function uc(a,b,c){if(c=b.__handlers&&b.__handlers[a.type]&&b.__handlers[a.type][c])for(var d=0,e;(e=c[d])&&(!tc(a)||a.target!==a.relatedTarget)&&(e.call(b,a),!a.O);d++);}
-function vc(a){var b=a.composedPath();Object.defineProperty(a,"currentTarget",{get:function(){return d},configurable:!0});for(var c=b.length-1;0<=c;c--){var d=b[c];uc(a,d,"capture");if(a.B)return}Object.defineProperty(a,"eventPhase",{get:function(){return Event.AT_TARGET}});var e;for(c=0;c<b.length;c++){d=b[c];var f=v(d);f=f&&f.root;if(0===c||f&&f===e)if(uc(a,d,"bubble"),d!==window&&(e=d.getRootNode()),a.B)break}}
-function wc(a,b,c,d,e,f){for(var h=0;h<a.length;h++){var g=a[h],k=g.type,l=g.capture,n=g.once,r=g.passive;if(b===g.node&&c===k&&d===l&&e===n&&f===r)return h}return-1}
-function xc(a,b,c){if(b){var d=typeof b;if("function"===d||"object"===d)if("object"!==d||b.handleEvent&&"function"===typeof b.handleEvent){var e=this instanceof Window?M.$:M.addEventListener;if(nc[a])return e.call(this,a,b,c);if(c&&"object"===typeof c){var f=!!c.capture;var h=!!c.once;var g=!!c.passive}else f=!!c,g=h=!1;var k=c&&c.D||this,l=b[X];if(l){if(-1<wc(l,k,a,f,h,g))return}else b[X]=[];l=function(e){h&&this.removeEventListener(a,b,c);e.__target||yc(e);if(k!==this){var f=Object.getOwnPropertyDescriptor(e,
-"currentTarget");Object.defineProperty(e,"currentTarget",{get:function(){return k},configurable:!0})}e.__previousCurrentTarget=e.currentTarget;if(!y(k)||-1!=e.composedPath().indexOf(k))if(e.composed||-1<e.composedPath().indexOf(k))if(tc(e)&&e.target===e.relatedTarget)e.eventPhase===Event.BUBBLING_PHASE&&e.stopImmediatePropagation();else if(e.eventPhase===Event.CAPTURING_PHASE||e.bubbles||e.target===k||k instanceof Window){var g="function"===d?b.call(k,e):b.handleEvent&&b.handleEvent(e);k!==this&&
-(f?(Object.defineProperty(e,"currentTarget",f),f=null):delete e.currentTarget);return g}};b[X].push({node:k,type:a,capture:f,once:h,passive:g,ba:l});sc[a]?(this.__handlers=this.__handlers||{},this.__handlers[a]=this.__handlers[a]||{capture:[],bubble:[]},this.__handlers[a][f?"capture":"bubble"].push(l)):e.call(this,a,l,c)}}}
-function zc(a,b,c){if(b){var d=this instanceof Window?M.aa:M.removeEventListener;if(nc[a])return d.call(this,a,b,c);if(c&&"object"===typeof c){var e=!!c.capture;var f=!!c.once;var h=!!c.passive}else e=!!c,h=f=!1;var g=c&&c.D||this,k=void 0;var l=null;try{l=b[X]}catch(n){}l&&(f=wc(l,g,a,e,f,h),-1<f&&(k=l.splice(f,1)[0].ba,l.length||(b[X]=void 0)));d.call(this,a,k||b,c);k&&sc[a]&&this.__handlers&&this.__handlers[a]&&(a=this.__handlers[a][e?"capture":"bubble"],k=a.indexOf(k),-1<k&&a.splice(k,1))}}
-function Ac(){for(var a in sc)window.addEventListener(a,function(a){a.__target||(yc(a),vc(a))},!0)}function yc(a){a.__target=a.target;a.C=a.relatedTarget;if(w.g){var b=Object.getPrototypeOf(a);if(!b.hasOwnProperty("__patchProto")){var c=Object.create(b);c.ca=b;oa(c,qc);b.__patchProto=c}a.__proto__=b.__patchProto}else oa(a,qc)}var Bc=rc(window.Event),Cc=rc(window.CustomEvent),Dc=rc(window.MouseEvent);
-function Ec(){window.Event=Bc;window.CustomEvent=Cc;window.MouseEvent=Dc;Ac();if(!lc&&Object.getOwnPropertyDescriptor(Event.prototype,"isTrusted")){var a=function(){var a=new MouseEvent("click",{bubbles:!0,cancelable:!0,composed:!0});this.dispatchEvent(a)};Element.prototype.click?Element.prototype.click=a:HTMLElement.prototype.click&&(HTMLElement.prototype.click=a)}};function Fc(a){var b=a.getRootNode();y(b)&&Bb(b);return(a=v(a))&&a.assignedSlot||null}
-var Gc={addEventListener:xc.bind(window),removeEventListener:zc.bind(window)},Hc={addEventListener:xc,removeEventListener:zc,appendChild:function(a){return Pb(this,a)},insertBefore:function(a,b){return Pb(this,a,b)},removeChild:function(a){return Sb(this,a)},replaceChild:function(a,b){Pb(this,a,b);Sb(this,b);return a},cloneNode:function(a){if("template"==this.localName)var b=M.cloneNode.call(this,a);else if(b=M.cloneNode.call(this,!1),a&&b.nodeType!==Node.ATTRIBUTE_NODE){a=this.childNodes;for(var c=
-0,d;c<a.length;c++)d=a[c].cloneNode(!0),b.appendChild(d)}return b},getRootNode:function(){return bc(this)},contains:function(a){return va(this,a)},dispatchEvent:function(a){D();return M.dispatchEvent.call(this,a)}};
-Object.defineProperties(Hc,{isConnected:{get:function(){if(ib&&ib.call(this))return!0;if(this.nodeType==Node.DOCUMENT_FRAGMENT_NODE)return!1;var a=this.ownerDocument;if(ua){if(M.contains.call(a,this))return!0}else if(a.documentElement&&M.contains.call(a.documentElement,this))return!0;for(a=this;a&&!(a instanceof Document);)a=a.parentNode||(y(a)?a.host:void 0);return!!(a&&a instanceof Document)},configurable:!0}});
-var Ic={get assignedSlot(){return Fc(this)}},Jc={querySelector:function(a){return cc(this,function(b){return na.call(b,a)},function(a){return!!a})[0]||null},querySelectorAll:function(a,b){if(b){b=Array.prototype.slice.call(M.querySelectorAll.call(this,a));var c=this.getRootNode();return b.filter(function(a){return a.getRootNode()==c})}return cc(this,function(b){return na.call(b,a)})}},Kc={},Lc={assignedNodes:function(a){if("slot"===this.localName){var b=this.getRootNode();y(b)&&Bb(b);return(b=v(this))?
-(a&&a.flatten?b.h:b.assignedNodes)||[]:[]}}},Mc=B({setAttribute:function(a,b){fc(this,a,b)},removeAttribute:function(a){M.removeAttribute.call(this,a);$b(this,a)},attachShadow:function(a){if(!this)throw"Must provide a host.";if(!a)throw"Not enough arguments.";return new P(zb,this,a)},get slot(){return this.getAttribute("slot")},set slot(a){fc(this,"slot",a)},get assignedSlot(){return Fc(this)}},Jc,Lc);Object.defineProperties(Mc,nb);
-var Nc={importNode:function(a,b){return gc(a,b)},getElementById:function(a){return cc(this,function(b){return b.id==a},function(a){return!!a})[0]||null}};Object.defineProperties(Nc,{_activeElement:ob.activeElement});
-for(var Oc=HTMLElement.prototype.blur,Pc={blur:function(){var a=v(this);(a=(a=a&&a.root)&&a.activeElement)?a.blur():Oc.call(this)}},Y={},Qc=q(Object.getOwnPropertyNames(Document.prototype)),Rc=Qc.next();!Rc.done;Y={f:Y.f},Rc=Qc.next())Y.f=Rc.value,"on"===Y.f.substring(0,2)&&Object.defineProperty(Pc,Y.f,{set:function(a){return function(b){var c=u(this),d=a.f.substring(2);c.s[a.f]&&this.removeEventListener(d,c.s[a.f]);this.addEventListener(d,b,{});c.s[a.f]=b}}(Y),get:function(a){return function(){var b=
-v(this);return b&&b.s[a.f]}}(Y),configurable:!0});var Sc=B({addEventListener:function(a,b,c){"object"!==typeof c&&(c={capture:!!c});c.D=this;this.host.addEventListener(a,b,c)},removeEventListener:function(a,b,c){"object"!==typeof c&&(c={capture:!!c});c.D=this;this.host.removeEventListener(a,b,c)},getElementById:function(a){return cc(this,function(b){return b.id==a},function(a){return!!a})[0]||null}},Jc);w.preferPerformance||(B(Nc,Jc),B(Kc,Jc));
-function Z(a,b){for(var c=Object.getOwnPropertyNames(b),d=0;d<c.length;d++){var e=c[d],f=Object.getOwnPropertyDescriptor(b,e);f.value?a[e]=f.value:Object.defineProperty(a,e,f)}};if(w.G){window.ShadyDOM={inUse:w.G,patch:function(a){rb(a);qb(a);return a},isShadyRoot:y,enqueue:ya,flush:D,settings:w,filterMutations:kc,observeChildren:ic,unobserveChildren:jc,nativeMethods:M,nativeTree:L,deferConnectionCallbacks:w.deferConnectionCallbacks,preferPerformance:w.preferPerformance,handlesDynamicScoping:!0};Ec();var Tc=window.customElements&&window.customElements.nativeHTMLElement||HTMLElement;Z(P.prototype,Sc);Z(window.Node.prototype,Hc);Z(window.Window.prototype,Gc);Z(window.Text.prototype,
-Ic);Z(window.Element.prototype,Mc);Z(window.DocumentFragment.prototype,Kc);Z(window.Document.prototype,Nc);window.HTMLSlotElement&&Z(window.HTMLSlotElement.prototype,Lc);Z(Tc.prototype,Pc);w.g&&(O(window.Node.prototype),O(window.Text.prototype),O(window.DocumentFragment.prototype),O(window.Element.prototype),O(Tc.prototype),O(window.Document.prototype),window.HTMLSlotElement&&O(window.HTMLSlotElement.prototype));pb();window.ShadowRoot=P};}).call(this);
+'use strict';var m;function aa(a){var b=0;return function(){return b<a.length?{done:!1,value:a[b++]}:{done:!0}}}function ba(a){var b="undefined"!=typeof Symbol&&Symbol.iterator&&a[Symbol.iterator];return b?b.call(a):{next:aa(a)}}function ca(a){for(var b,c=[];!(b=a.next()).done;)c.push(b.value);return c}var da="undefined"!=typeof window&&window===this?this:"undefined"!=typeof global&&null!=global?global:this;function n(a,b){return{index:a,o:[],v:b}}
+function ea(a,b,c,d){var e=0,f=0,g=0,h=0,l=Math.min(b-e,d-f);if(0==e&&0==f)a:{for(g=0;g<l;g++)if(a[g]!==c[g])break a;g=l}if(b==a.length&&d==c.length){h=a.length;for(var k=c.length,p=0;p<l-g&&fa(a[--h],c[--k]);)p++;h=p}e+=g;f+=g;b-=h;d-=h;if(0==b-e&&0==d-f)return[];if(e==b){for(b=n(e,0);f<d;)b.o.push(c[f++]);return[b]}if(f==d)return[n(e,b-e)];l=e;g=f;d=d-g+1;h=b-l+1;b=Array(d);for(k=0;k<d;k++)b[k]=Array(h),b[k][0]=k;for(k=0;k<h;k++)b[0][k]=k;for(k=1;k<d;k++)for(p=1;p<h;p++)if(a[l+p-1]===c[g+k-1])b[k][p]=
+b[k-1][p-1];else{var w=b[k-1][p]+1,K=b[k][p-1]+1;b[k][p]=w<K?w:K}l=b.length-1;g=b[0].length-1;d=b[l][g];for(a=[];0<l||0<g;)0==l?(a.push(2),g--):0==g?(a.push(3),l--):(h=b[l-1][g-1],k=b[l-1][g],p=b[l][g-1],w=k<p?k<h?k:h:p<h?p:h,w==h?(h==d?a.push(0):(a.push(1),d=h),l--,g--):w==k?(a.push(3),l--,d=k):(a.push(2),g--,d=p));a.reverse();b=void 0;l=[];for(g=0;g<a.length;g++)switch(a[g]){case 0:b&&(l.push(b),b=void 0);e++;f++;break;case 1:b||(b=n(e,0));b.v++;e++;b.o.push(c[f]);f++;break;case 2:b||(b=n(e,0));
+b.v++;e++;break;case 3:b||(b=n(e,0)),b.o.push(c[f]),f++}b&&l.push(b);return l}function fa(a,b){return a===b};function ha(){}ha.prototype.toJSON=function(){return{}};function q(a){a.__shady||(a.__shady=new ha);return a.__shady}function r(a){return a&&a.__shady};var t=window.ShadyDOM||{};t.U=!(!Element.prototype.attachShadow||!Node.prototype.getRootNode);var ia=Object.getOwnPropertyDescriptor(Node.prototype,"firstChild");t.f=!!(ia&&ia.configurable&&ia.get);t.F=t.force||!t.U;t.g=t.noPatch||!1;t.J=t.preferPerformance;var ja=navigator.userAgent.match("Trident");t.L=ja;function u(a){return(a=r(a))&&void 0!==a.firstChild}function v(a){return"ShadyRoot"===a.R}function ka(a){return(a=(a=r(a))&&a.root)&&la(a)}
+var x=Element.prototype,ma=x.matches||x.matchesSelector||x.mozMatchesSelector||x.msMatchesSelector||x.oMatchesSelector||x.webkitMatchesSelector,na=document.createTextNode(""),oa=0,pa=[];(new MutationObserver(function(){for(;pa.length;)try{pa.shift()()}catch(a){throw na.textContent=oa++,a;}})).observe(na,{characterData:!0});function qa(a){pa.push(a);na.textContent=oa++}var ra=!!document.contains;function sa(a,b){for(;b;){if(b==a)return!0;b=b.__shady_parentNode}return!1}
+function ta(a){for(var b=a.length-1;0<=b;b--){var c=a[b],d=c.getAttribute("id")||c.getAttribute("name");d&&"length"!==d&&isNaN(d)&&(a[d]=c)}a.item=function(b){return a[b]};a.namedItem=function(b){if("length"!==b&&isNaN(b)&&a[b])return a[b];for(var c=ba(a),d=c.next();!d.done;d=c.next())if(d=d.value,(d.getAttribute("id")||d.getAttribute("name"))==b)return d;return null};return a}function va(a){var b=[];for(a=a.__shady_native_firstChild;a;a=a.__shady_native_nextSibling)b.push(a);return b}
+function wa(a){var b=[];for(a=a.__shady_firstChild;a;a=a.__shady_nextSibling)b.push(a);return b}function y(a,b,c,d){c=void 0===c?"":c;for(var e in b){var f=b[e];if(!(d&&0<=d.indexOf(e))){f.configurable=!0;var g=c+e;if(f.value)a[g]=f.value;else try{Object.defineProperty(a,g,f)}catch(h){}}}}function z(a){var b={};Object.getOwnPropertyNames(a).forEach(function(c){b[c]=Object.getOwnPropertyDescriptor(a,c)});return b};var A=[],xa;function ya(a){xa||(xa=!0,qa(B));A.push(a)}function B(){xa=!1;for(var a=!!A.length;A.length;)A.shift()();return a}B.list=A;var C=z({get childNodes(){return this.__shady_childNodes},get firstChild(){return this.__shady_firstChild},get lastChild(){return this.__shady_lastChild},get childElementCount(){return this.__shady_childElementCount},get children(){return this.__shady_children},get firstElementChild(){return this.__shady_firstElementChild},get lastElementChild(){return this.__shady_lastElementChild},get shadowRoot(){return this.__shady_shadowRoot}}),D=z({get textContent(){return this.__shady_textContent},set textContent(a){this.__shady_textContent=
+a},get innerHTML(){return this.__shady_innerHTML},set innerHTML(a){return this.__shady_innerHTML=a}}),E=z({get parentElement(){return this.__shady_parentElement},get parentNode(){return this.__shady_parentNode},get nextSibling(){return this.__shady_nextSibling},get previousSibling(){return this.__shady_previousSibling},get nextElementSibling(){return this.__shady_nextElementSibling},get previousElementSibling(){return this.__shady_previousElementSibling},get className(){return this.__shady_className},
+set className(a){return this.__shady_className=a}}),za;for(za in C)C[za].enumerable=!1;for(var Aa in D)D[Aa].enumerable=!1;for(var Ba in E)E[Ba].enumerable=!1;var Ca=t.f||t.g,Da=Ca?function(){}:function(a){var b=q(a);b.N||(b.N=!0,y(a,E))},Ea=Ca?function(){}:function(a){var b=q(a);b.M||(b.M=!0,y(a,C),window.customElements&&!t.g||y(a,D))};function Fa(a,b,c,d){Da(a);d=d||null;var e=q(a),f=d?q(d):null;e.previousSibling=d?f.previousSibling:b.__shady_lastChild;if(f=r(e.previousSibling))f.nextSibling=a;if(f=r(e.nextSibling=d))f.previousSibling=a;e.parentNode=b;d?d===c.firstChild&&(c.firstChild=a):(c.lastChild=a,c.firstChild||(c.firstChild=a));c.childNodes=null}
+function Ga(a,b,c){Ea(b);var d=q(b);void 0!==d.firstChild&&(d.childNodes=null);if(a.nodeType===Node.DOCUMENT_FRAGMENT_NODE)for(a=a.__shady_native_firstChild;a;a=a.__shady_native_nextSibling)Fa(a,b,d,c);else Fa(a,b,d,c)}
+function Ha(a,b){var c=q(a);b=q(b);a===b.firstChild&&(b.firstChild=c.nextSibling);a===b.lastChild&&(b.lastChild=c.previousSibling);a=c.previousSibling;var d=c.nextSibling;a&&(q(a).nextSibling=d);d&&(q(d).previousSibling=a);c.parentNode=c.previousSibling=c.nextSibling=void 0;void 0!==b.childNodes&&(b.childNodes=null)}
+function F(a,b){var c=q(a);if(b||void 0===c.firstChild){c.childNodes=null;var d=c.firstChild=a.__shady_native_firstChild;c.lastChild=a.__shady_native_lastChild;Ea(a);c=d;for(d=void 0;c;c=c.__shady_native_nextSibling){var e=q(c);e.parentNode=b||a;e.nextSibling=c.__shady_native_nextSibling;e.previousSibling=d||null;d=c;Da(c)}}};var Ia=window.document,Ja=t.J,Ka=Object.getOwnPropertyDescriptor(Node.prototype,"isConnected"),La=Ka&&Ka.get;function Ma(a){for(var b;b=a.__shady_firstChild;)a.__shady_removeChild(b)}function Na(a){var b=r(a);if(b&&void 0!==b.A)for(b=a.__shady_firstChild;b;b=b.__shady_nextSibling)Na(b);if(a=r(a))a.A=void 0}function Oa(a){var b=a;a&&"slot"===a.localName&&(b=(b=(b=r(a))&&b.l)&&b.length?b[0]:Oa(a.__shady_nextSibling));return b}
+function Pa(a,b,c){if(a=(a=r(a))&&a.m)b&&a.addedNodes.push(b),c&&a.removedNodes.push(c),Qa(a)}
+var L=z({get parentNode(){var a=r(this);a=a&&a.parentNode;return void 0!==a?a:this.__shady_native_parentNode},get firstChild(){var a=r(this);a=a&&a.firstChild;return void 0!==a?a:this.__shady_native_firstChild},get lastChild(){var a=r(this);a=a&&a.lastChild;return void 0!==a?a:this.__shady_native_lastChild},get nextSibling(){var a=r(this);a=a&&a.nextSibling;return void 0!==a?a:this.__shady_native_nextSibling},get previousSibling(){var a=r(this);a=a&&a.previousSibling;return void 0!==a?a:this.__shady_native_previousSibling},
+get childNodes(){if(u(this)){var a=r(this);if(!a.childNodes){a.childNodes=[];for(var b=this.__shady_firstChild;b;b=b.__shady_nextSibling)a.childNodes.push(b)}var c=a.childNodes}else c=this.__shady_native_childNodes;c.item=function(a){return c[a]};return c},get parentElement(){var a=r(this);(a=a&&a.parentNode)&&a.nodeType!==Node.ELEMENT_NODE&&(a=null);return void 0!==a?a:this.__shady_native_parentElement},get isConnected(){if(La&&La.call(this))return!0;if(this.nodeType==Node.DOCUMENT_FRAGMENT_NODE)return!1;
+var a=this.ownerDocument;if(ra){if(a.__shady_native_contains(this))return!0}else if(a.documentElement&&a.documentElement.__shady_native_contains(this))return!0;for(a=this;a&&!(a instanceof Document);)a=a.__shady_parentNode||(v(a)?a.host:void 0);return!!(a&&a instanceof Document)},get textContent(){if(u(this)){for(var a=[],b=this.__shady_firstChild;b;b=b.__shady_nextSibling)b.nodeType!==Node.COMMENT_NODE&&a.push(b.__shady_textContent);return a.join("")}return this.__shady_native_textContent},set textContent(a){if("undefined"===
+typeof a||null===a)a="";switch(this.nodeType){case Node.ELEMENT_NODE:case Node.DOCUMENT_FRAGMENT_NODE:if(!u(this)&&t.f){var b=this.__shady_firstChild;(b!=this.__shady_lastChild||b&&b.nodeType!=Node.TEXT_NODE)&&Ma(this);this.__shady_native_textContent=a}else Ma(this),(0<a.length||this.nodeType===Node.ELEMENT_NODE)&&this.__shady_insertBefore(document.createTextNode(a));break;default:this.nodeValue=a}},insertBefore:function(a,b){if(this.ownerDocument!==Ia&&a.ownerDocument!==Ia)return this.__shady_native_insertBefore(a,
+b),a;if(a===this)throw Error("Failed to execute 'appendChild' on 'Node': The new child element contains the parent.");if(b){var c=r(b);c=c&&c.parentNode;if(void 0!==c&&c!==this||void 0===c&&b.__shady_native_parentNode!==this)throw Error("Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.");}if(b===a)return a;var d=[],e=(c=G(this))?c.host.localName:H(this),f=a.__shady_parentNode;if(f){var g=H(a);var h=!!c||!G(a)||Ja&&void 0!==
+this.__noInsertionPoint;f.__shady_removeChild(a,h)}f=!0;var l=(!Ja||void 0===a.__noInsertionPoint&&void 0===this.__noInsertionPoint)&&!Ra(a,e),k=c&&!a.__noInsertionPoint&&(!Ja||a.nodeType===Node.DOCUMENT_FRAGMENT_NODE);if(k||l)l&&(g=g||H(a)),Sa(a,function(a){k&&"slot"===a.localName&&d.push(a);if(l){var b=g;I()&&(b&&Ta(a,b),(b=I())&&b.scopeNode(a,e))}});d.length&&(Ua(c),c.c.push.apply(c.c,d instanceof Array?d:ca(ba(d))),J(c));u(this)&&(Ga(a,this,b),c=r(this),ka(this)?(J(c.root),f=!1):c.root&&(f=!1));
+f?(c=v(this)?this.host:this,b?(b=Oa(b),c.__shady_native_insertBefore(a,b)):c.__shady_native_appendChild(a)):a.ownerDocument!==this.ownerDocument&&this.ownerDocument.adoptNode(a);Pa(this,a);return a},appendChild:function(a){if(this!=a||!v(a))return this.__shady_insertBefore(a)},removeChild:function(a,b){b=void 0===b?!1:b;if(this.ownerDocument!==Ia)return this.__shady_native_removeChild(a);if(a.__shady_parentNode!==this)throw Error("The node to be removed is not a child of this node: "+a);var c=G(a),
+d=c&&Va(c,a),e=r(this);if(u(this)&&(Ha(a,this),ka(this))){J(e.root);var f=!0}if(I()&&!b&&c&&a.nodeType!==Node.TEXT_NODE){var g=H(a);Sa(a,function(a){Ta(a,g)})}Na(a);c&&((b=this&&"slot"===this.localName)&&(f=!0),(d||b)&&J(c));f||(f=v(this)?this.host:this,(!e.root&&"slot"!==a.localName||f===a.__shady_native_parentNode)&&f.__shady_native_removeChild(a));Pa(this,null,a);return a},replaceChild:function(a,b){this.__shady_insertBefore(a,b);this.__shady_removeChild(b);return a},cloneNode:function(a){if("template"==
+this.localName)return this.__shady_native_cloneNode(a);var b=this.__shady_native_cloneNode(!1);if(a&&b.nodeType!==Node.ATTRIBUTE_NODE){a=this.__shady_firstChild;for(var c;a;a=a.__shady_nextSibling)c=a.__shady_cloneNode(!0),b.__shady_appendChild(c)}return b},getRootNode:function(a){if(this&&this.nodeType){var b=q(this),c=b.A;void 0===c&&(v(this)?(c=this,b.A=c):(c=(c=this.__shady_parentNode)?c.__shady_getRootNode(a):this,document.documentElement.__shady_native_contains(this)&&(b.A=c)));return c}},contains:function(a){return sa(this,
+a)}});function Wa(a,b,c){var d=[];Xa(a,b,c,d);return d}function Xa(a,b,c,d){for(a=a.__shady_firstChild;a;a=a.__shady_nextSibling){var e;if(e=a.nodeType===Node.ELEMENT_NODE){e=a;var f=b,g=c,h=d,l=f(e);l&&h.push(e);g&&g(l)?e=l:(Xa(e,f,g,h),e=void 0)}if(e)break}}
+var M=z({get firstElementChild(){var a=r(this);if(a&&void 0!==a.firstChild){for(a=this.__shady_firstChild;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.__shady_nextSibling;return a}return this.__shady_native_firstElementChild},get lastElementChild(){var a=r(this);if(a&&void 0!==a.lastChild){for(a=this.__shady_lastChild;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.__shady_previousSibling;return a}return this.__shady_native_lastElementChild},get children(){return u(this)?ta(Array.prototype.filter.call(wa(this),
+function(a){return a.nodeType===Node.ELEMENT_NODE})):this.__shady_native_children},get childElementCount(){var a=this.__shady_children;return a?a.length:0}}),Ya=z({querySelector:function(a){return Wa(this,function(b){return ma.call(b,a)},function(a){return!!a})[0]||null},querySelectorAll:function(a,b){if(b){b=Array.prototype.slice.call(this.__shady_native_querySelectorAll(a));var c=this.__shady_getRootNode();return b.filter(function(a){return a.__shady_getRootNode()==c})}return Wa(this,function(b){return ma.call(b,
+a)})}}),Za=t.J&&!t.g?Object.assign({},M):M;Object.assign(M,Ya);var $a=z({getElementById:function(a){return""===a?null:Wa(this,function(b){return b.id==a},function(a){return!!a})[0]||null}});var ab=z({get activeElement(){var a=t.f?document.__shady_native_activeElement:document.activeElement;if(!a||!a.nodeType)return null;var b=!!v(this);if(!(this===document||b&&this.host!==a&&this.host.__shady_native_contains(a)))return null;for(b=G(a);b&&b!==this;)a=b.host,b=G(a);return this===document?b?null:a:b===this?a:null}});var bb=/[&\u00A0"]/g,cb=/[&\u00A0<>]/g;function db(a){switch(a){case "&":return"&amp;";case "<":return"&lt;";case ">":return"&gt;";case '"':return"&quot;";case "\u00a0":return"&nbsp;"}}function eb(a){for(var b={},c=0;c<a.length;c++)b[a[c]]=!0;return b}var fb=eb("area base br col command embed hr img input keygen link meta param source track wbr".split(" ")),gb=eb("style script xmp iframe noembed noframes plaintext noscript".split(" "));
+function hb(a,b){"template"===a.localName&&(a=a.content);for(var c="",d=b?b(a):a.childNodes,e=0,f=d.length,g=void 0;e<f&&(g=d[e]);e++){a:{var h=g;var l=a,k=b;switch(h.nodeType){case Node.ELEMENT_NODE:l=h.localName;for(var p="<"+l,w=h.attributes,K=0,ua;ua=w[K];K++)p+=" "+ua.name+'="'+ua.value.replace(bb,db)+'"';p+=">";h=fb[l]?p:p+hb(h,k)+"</"+l+">";break a;case Node.TEXT_NODE:h=h.data;h=l&&gb[l.localName]?h:h.replace(cb,db);break a;case Node.COMMENT_NODE:h="\x3c!--"+h.data+"--\x3e";break a;default:throw window.console.error(h),
+Error("not implemented");}}c+=h}return c};var ib=document.implementation.createHTMLDocument("inert"),jb=z({get innerHTML(){return u(this)?hb("template"===this.localName?this.content:this,wa):this.__shady_native_innerHTML},set innerHTML(a){if("template"===this.localName)this.__shady_native_innerHTML=a;else{Ma(this);var b=this.localName||"div";b=this.namespaceURI&&this.namespaceURI!==ib.namespaceURI?ib.createElementNS(this.namespaceURI,b):ib.createElement(b);for(t.f?b.__shady_native_innerHTML=a:b.innerHTML=a;a=b.__shady_firstChild;)this.__shady_insertBefore(a)}}});var kb=z({addEventListener:function(a,b,c){"object"!==typeof c&&(c={capture:!!c});c.i=c.i||this;this.host.__shady_addEventListener(a,b,c)},removeEventListener:function(a,b,c){"object"!==typeof c&&(c={capture:!!c});c.i=c.i||this;this.host.__shady_removeEventListener(a,b,c)}});function lb(a,b){y(a,kb,b);y(a,ab,b);y(a,jb,b);y(a,M,b);t.g&&!b?(y(a,L,b),y(a,$a,b)):t.f||(y(a,E),y(a,C),y(a,D))};var mb={},N=t.deferConnectionCallbacks&&"loading"===document.readyState,O;function nb(a){var b=[];do b.unshift(a);while(a=a.__shady_parentNode);return b}function P(a,b,c){if(a!==mb)throw new TypeError("Illegal constructor");this.a=null;ob(this,b,c)}
+function ob(a,b,c){a.R="ShadyRoot";a.host=b;a.mode=c&&c.mode;F(a.host);b=q(a.host);b.root=a;b.V="closed"!==a.mode?a:null;b=q(a);b.firstChild=b.lastChild=b.parentNode=b.nextSibling=b.previousSibling=null;if(t.preferPerformance)for(;b=a.host.__shady_native_firstChild;)a.host.__shady_native_removeChild(b);else J(a)}function J(a){a.j||(a.j=!0,ya(function(){return Q(a)}))}
+function Q(a){var b;if(b=a.j){for(var c;a;)a:{a.j&&(c=a),b=a;a=b.host.__shady_getRootNode();if(v(a)&&(b=r(b.host))&&0<b.u)break a;a=void 0}b=c}(c=b)&&c._renderSelf()}
+P.prototype._renderSelf=function(){var a=N;N=!0;this.j=!1;if(this.a){R(this);for(var b=0,c;b<this.a.length;b++){c=this.a[b];var d=r(c),e=d.assignedNodes;d.assignedNodes=[];d.l=[];if(d.H=e)for(d=0;d<e.length;d++){var f=r(e[d]);f.C=f.assignedSlot;f.assignedSlot===c&&(f.assignedSlot=null)}}for(b=this.host.__shady_firstChild;b;b=b.__shady_nextSibling)pb(this,b);for(b=0;b<this.a.length;b++){c=this.a[b];e=r(c);if(!e.assignedNodes.length)for(d=c.__shady_firstChild;d;d=d.__shady_nextSibling)pb(this,d,c);
+(d=(d=r(c.__shady_parentNode))&&d.root)&&(la(d)||d.j)&&d._renderSelf();qb(this,e.l,e.assignedNodes);if(d=e.H){for(f=0;f<d.length;f++)r(d[f]).C=null;e.H=null;d.length>e.assignedNodes.length&&(e.D=!0)}e.D&&(e.D=!1,rb(this,c))}c=this.a;b=[];for(e=0;e<c.length;e++)d=c[e].__shady_parentNode,(f=r(d))&&f.root||!(0>b.indexOf(d))||b.push(d);for(c=0;c<b.length;c++){f=b[c];e=f===this?this.host:f;d=[];for(f=f.__shady_firstChild;f;f=f.__shady_nextSibling)if("slot"==f.localName)for(var g=r(f).l,h=0;h<g.length;h++)d.push(g[h]);
+else d.push(f);f=va(e);g=ea(d,d.length,f,f.length);for(var l=h=0,k=void 0;h<g.length&&(k=g[h]);h++){for(var p=0,w=void 0;p<k.o.length&&(w=k.o[p]);p++)w.__shady_native_parentNode===e&&e.__shady_native_removeChild(w),f.splice(k.index+l,1);l-=k.v}l=0;for(k=void 0;l<g.length&&(k=g[l]);l++)for(h=f[k.index],p=k.index;p<k.index+k.v;p++)w=d[p],e.__shady_native_insertBefore(w,h),f.splice(p,0,w)}}if(!t.preferPerformance&&!this.G)for(b=this.host.__shady_firstChild;b;b=b.__shady_nextSibling)c=r(b),b.__shady_native_parentNode!==
+this.host||"slot"!==b.localName&&c.assignedSlot||this.host.__shady_native_removeChild(b);this.G=!0;N=a;O&&O()};function pb(a,b,c){var d=q(b),e=d.C;d.C=null;c||(c=(a=a.b[b.__shady_slot||"__catchall"])&&a[0]);c?(q(c).assignedNodes.push(b),d.assignedSlot=c):d.assignedSlot=void 0;e!==d.assignedSlot&&d.assignedSlot&&(q(d.assignedSlot).D=!0)}function qb(a,b,c){for(var d=0,e=void 0;d<c.length&&(e=c[d]);d++)if("slot"==e.localName){var f=r(e).assignedNodes;f&&f.length&&qb(a,b,f)}else b.push(c[d])}
+function rb(a,b){b.__shady_native_dispatchEvent(new Event("slotchange"));b=r(b);b.assignedSlot&&rb(a,b.assignedSlot)}function Ua(a){a.c=a.c||[];a.a=a.a||[];a.b=a.b||{}}function R(a){if(a.c&&a.c.length){for(var b=a.c,c,d=0;d<b.length;d++){var e=b[d];F(e);var f=e.__shady_parentNode;F(f);f=r(f);f.u=(f.u||0)+1;f=sb(e);a.b[f]?(c=c||{},c[f]=!0,a.b[f].push(e)):a.b[f]=[e];a.a.push(e)}if(c)for(var g in c)a.b[g]=tb(a.b[g]);a.c=[]}}
+function sb(a){var b=a.name||a.getAttribute("name")||"__catchall";return a.O=b}function tb(a){return a.sort(function(a,c){a=nb(a);for(var b=nb(c),e=0;e<a.length;e++){c=a[e];var f=b[e];if(c!==f)return a=wa(c.__shady_parentNode),a.indexOf(c)-a.indexOf(f)}})}
+function Va(a,b){if(a.a){R(a);var c=a.b,d;for(d in c)for(var e=c[d],f=0;f<e.length;f++){var g=e[f];if(sa(b,g)){e.splice(f,1);var h=a.a.indexOf(g);0<=h&&(a.a.splice(h,1),(h=r(g.__shady_parentNode))&&h.u&&h.u--);f--;g=r(g);if(h=g.l)for(var l=0;l<h.length;l++){var k=h[l],p=k.__shady_native_parentNode;p&&p.__shady_native_removeChild(k)}g.l=[];g.assignedNodes=[];h=!0}}return h}}function la(a){R(a);return!(!a.a||!a.a.length)}
+(function(a){a.__proto__=DocumentFragment.prototype;lb(a,"__shady_");lb(a);Object.defineProperties(a,{nodeType:{value:Node.DOCUMENT_FRAGMENT_NODE,configurable:!0},nodeName:{value:"#document-fragment",configurable:!0},nodeValue:{value:null,configurable:!0}});["localName","namespaceURI","prefix"].forEach(function(b){Object.defineProperty(a,b,{value:void 0,configurable:!0})});["ownerDocument","baseURI","isConnected"].forEach(function(b){Object.defineProperty(a,b,{get:function(){return this.host[b]},
+configurable:!0})})})(P.prototype);
+if(window.customElements&&t.F&&!t.preferPerformance){var S=new Map;O=function(){var a=[];S.forEach(function(b,c){a.push([c,b])});S.clear();for(var b=0;b<a.length;b++){var c=a[b][0];a[b][1]?c.__shadydom_connectedCallback():c.__shadydom_disconnectedCallback()}};N&&document.addEventListener("readystatechange",function(){N=!1;O()},{once:!0});var ub=function(a,b,c){var d=0,e="__isConnected"+d++;if(b||c)a.prototype.connectedCallback=a.prototype.__shadydom_connectedCallback=function(){N?S.set(this,!0):this[e]||
+(this[e]=!0,b&&b.call(this))},a.prototype.disconnectedCallback=a.prototype.__shadydom_disconnectedCallback=function(){N?this.isConnected||S.set(this,!1):this[e]&&(this[e]=!1,c&&c.call(this))};return a},vb=window.customElements.define,wb=function(a,b){var c=b.prototype.connectedCallback,d=b.prototype.disconnectedCallback;vb.call(window.customElements,a,ub(b,c,d));b.prototype.connectedCallback=c;b.prototype.disconnectedCallback=d};window.customElements.define=wb;Object.defineProperty(window.CustomElementRegistry.prototype,
+"define",{value:wb,configurable:!0})}function G(a){a=a.__shady_getRootNode();if(v(a))return a};function xb(){this.a=!1;this.addedNodes=[];this.removedNodes=[];this.w=new Set}function Qa(a){a.a||(a.a=!0,qa(function(){a.flush()}))}xb.prototype.flush=function(){if(this.a){this.a=!1;var a=this.takeRecords();a.length&&this.w.forEach(function(b){b(a)})}};xb.prototype.takeRecords=function(){if(this.addedNodes.length||this.removedNodes.length){var a=[{addedNodes:this.addedNodes,removedNodes:this.removedNodes}];this.addedNodes=[];this.removedNodes=[];return a}return[]};
+function yb(a,b){var c=q(a);c.m||(c.m=new xb);c.m.w.add(b);var d=c.m;return{P:b,T:d,S:a,takeRecords:function(){return d.takeRecords()}}}function zb(a){var b=a&&a.T;b&&(b.w.delete(a.P),b.w.size||(q(a.S).m=null))}
+function Ab(a,b){var c=b.getRootNode();return a.map(function(a){var b=c===a.target.getRootNode();if(b&&a.addedNodes){if(b=Array.from(a.addedNodes).filter(function(a){return c===a.getRootNode()}),b.length)return a=Object.create(a),Object.defineProperty(a,"addedNodes",{value:b,configurable:!0}),a}else if(b)return a}).filter(function(a){return a})};var T="__eventWrappers"+Date.now(),Bb=function(){var a=Object.getOwnPropertyDescriptor(Event.prototype,"composed");return a?function(b){return a.get.call(b)}:null}(),Cb=function(){function a(){}var b=!1,c={get capture(){b=!0}};window.addEventListener("test",a,c);window.removeEventListener("test",a,c);return b}();function Db(a){if(a&&"object"===typeof a){var b=!!a.capture;var c=!!a.once;var d=!!a.passive;var e=a.i}else b=!!a,d=c=!1;return{K:e,capture:b,once:c,passive:d,I:Cb?a:b}}
+var Eb={blur:!0,focus:!0,focusin:!0,focusout:!0,click:!0,dblclick:!0,mousedown:!0,mouseenter:!0,mouseleave:!0,mousemove:!0,mouseout:!0,mouseover:!0,mouseup:!0,wheel:!0,beforeinput:!0,input:!0,keydown:!0,keyup:!0,compositionstart:!0,compositionupdate:!0,compositionend:!0,touchstart:!0,touchend:!0,touchmove:!0,touchcancel:!0,pointerover:!0,pointerenter:!0,pointerdown:!0,pointermove:!0,pointerup:!0,pointercancel:!0,pointerout:!0,pointerleave:!0,gotpointercapture:!0,lostpointercapture:!0,dragstart:!0,
+drag:!0,dragenter:!0,dragleave:!0,dragover:!0,drop:!0,dragend:!0,DOMActivate:!0,DOMFocusIn:!0,DOMFocusOut:!0,keypress:!0},Fb={DOMAttrModified:!0,DOMAttributeNameChanged:!0,DOMCharacterDataModified:!0,DOMElementNameChanged:!0,DOMNodeInserted:!0,DOMNodeInsertedIntoDocument:!0,DOMNodeRemoved:!0,DOMNodeRemovedFromDocument:!0,DOMSubtreeModified:!0};function Gb(a){return a instanceof Node?a.__shady_getRootNode():a}
+function Hb(a,b){var c=[],d=a;for(a=Gb(a);d;)c.push(d),d.__shady_assignedSlot?d=d.__shady_assignedSlot:d.nodeType===Node.DOCUMENT_FRAGMENT_NODE&&d.host&&(b||d!==a)?d=d.host:d=d.__shady_parentNode;c[c.length-1]===document&&c.push(window);return c}function Ib(a){a.__composedPath||(a.__composedPath=Hb(a.target,!0));return a.__composedPath}function Jb(a,b){if(!v)return a;a=Hb(a,!0);for(var c=0,d,e=void 0,f,g=void 0;c<b.length;c++)if(d=b[c],f=Gb(d),f!==e&&(g=a.indexOf(f),e=f),!v(f)||-1<g)return d}
+function Kb(a){function b(b,d){b=new a(b,d);b.__composed=d&&!!d.composed;return b}b.__proto__=a;b.prototype=a.prototype;return b}var Lb={focus:!0,blur:!0};function Mb(a){return a.__target!==a.target||a.__relatedTarget!==a.relatedTarget}function Nb(a,b,c){if(c=b.__handlers&&b.__handlers[a.type]&&b.__handlers[a.type][c])for(var d=0,e;(e=c[d])&&(!Mb(a)||a.target!==a.relatedTarget)&&(e.call(b,a),!a.__immediatePropagationStopped);d++);}
+function Ob(a){var b=a.composedPath();Object.defineProperty(a,"currentTarget",{get:function(){return d},configurable:!0});for(var c=b.length-1;0<=c;c--){var d=b[c];Nb(a,d,"capture");if(a.B)return}Object.defineProperty(a,"eventPhase",{get:function(){return Event.AT_TARGET}});var e;for(c=0;c<b.length;c++){d=b[c];var f=r(d);f=f&&f.root;if(0===c||f&&f===e)if(Nb(a,d,"bubble"),d!==window&&(e=d.__shady_getRootNode()),a.B)break}}
+function Pb(a,b,c,d,e,f){for(var g=0;g<a.length;g++){var h=a[g],l=h.type,k=h.capture,p=h.once,w=h.passive;if(b===h.node&&c===l&&d===k&&e===p&&f===w)return g}return-1}
+function Qb(a,b,c){var d=Db(c),e=d.capture,f=d.once,g=d.passive,h=d.K;d=d.I;if(b){var l=typeof b;if("function"===l||"object"===l)if("object"!==l||b.handleEvent&&"function"===typeof b.handleEvent){if(Fb[a])return this.__shady_native_addEventListener(a,b,d);var k=h||this;if(h=b[T]){if(-1<Pb(h,k,a,e,f,g))return}else b[T]=[];h=function(d){f&&this.__shady_removeEventListener(a,b,c);d.__target||Rb(d);if(k!==this){var e=Object.getOwnPropertyDescriptor(d,"currentTarget");Object.defineProperty(d,"currentTarget",
+{get:function(){return k},configurable:!0})}d.__previousCurrentTarget=d.currentTarget;if(!v(k)&&"slot"!==k.localName||-1!=d.composedPath().indexOf(k))if(d.composed||-1<d.composedPath().indexOf(k))if(Mb(d)&&d.target===d.relatedTarget)d.eventPhase===Event.BUBBLING_PHASE&&d.stopImmediatePropagation();else if(d.eventPhase===Event.CAPTURING_PHASE||d.bubbles||d.target===k||k instanceof Window){var g="function"===l?b.call(k,d):b.handleEvent&&b.handleEvent(d);k!==this&&(e?(Object.defineProperty(d,"currentTarget",
+e),e=null):delete d.currentTarget);return g}};b[T].push({node:k,type:a,capture:e,once:f,passive:g,W:h});Lb[a]?(this.__handlers=this.__handlers||{},this.__handlers[a]=this.__handlers[a]||{capture:[],bubble:[]},this.__handlers[a][e?"capture":"bubble"].push(h)):this.__shady_native_addEventListener(a,h,d)}}}
+function Sb(a,b,c){if(b){var d=Db(c);c=d.capture;var e=d.once,f=d.passive,g=d.K;d=d.I;if(Fb[a])return this.__shady_native_removeEventListener(a,b,d);var h=g||this;g=void 0;var l=null;try{l=b[T]}catch(k){}l&&(e=Pb(l,h,a,c,e,f),-1<e&&(g=l.splice(e,1)[0].W,l.length||(b[T]=void 0)));this.__shady_native_removeEventListener(a,g||b,d);g&&Lb[a]&&this.__handlers&&this.__handlers[a]&&(a=this.__handlers[a][c?"capture":"bubble"],b=a.indexOf(g),-1<b&&a.splice(b,1))}}
+function Tb(){for(var a in Lb)window.__shady_native_addEventListener(a,function(a){a.__target||(Rb(a),Ob(a))},!0)}
+var Ub=z({get composed(){void 0===this.__composed&&(Bb?this.__composed="focusin"===this.type||"focusout"===this.type||Bb(this):!1!==this.isTrusted&&(this.__composed=Eb[this.type]));return this.__composed||!1},composedPath:function(){this.__composedPath||(this.__composedPath=Hb(this.__target,this.composed));return this.__composedPath},get target(){return Jb(this.currentTarget||this.__previousCurrentTarget,this.composedPath())},get relatedTarget(){if(!this.__relatedTarget)return null;this.__relatedTargetComposedPath||
+(this.__relatedTargetComposedPath=Hb(this.__relatedTarget,!0));return Jb(this.currentTarget||this.__previousCurrentTarget,this.__relatedTargetComposedPath)},stopPropagation:function(){Event.prototype.stopPropagation.call(this);this.B=!0},stopImmediatePropagation:function(){Event.prototype.stopImmediatePropagation.call(this);this.B=this.__immediatePropagationStopped=!0}});
+function Rb(a){a.__target=a.target;a.__relatedTarget=a.relatedTarget;if(t.f){var b=Object.getPrototypeOf(a);if(!Object.hasOwnProperty(b,"__shady_patchedProto")){var c=Object.create(b);c.__shady_sourceProto=b;y(c,Ub);b.__shady_patchedProto=c}a.__proto__=b.__shady_patchedProto}else y(a,Ub)}var Vb=Kb(Event),Wb=Kb(CustomEvent),Xb=Kb(MouseEvent);
+function Yb(){if(!Bb&&Object.getOwnPropertyDescriptor(Event.prototype,"isTrusted")){var a=function(){var a=new MouseEvent("click",{bubbles:!0,cancelable:!0,composed:!0});this.__shady_dispatchEvent(a)};Element.prototype.click?Element.prototype.click=a:HTMLElement.prototype.click&&(HTMLElement.prototype.click=a)}}var Zb=Object.getOwnPropertyNames(Document.prototype).filter(function(a){return"on"===a.substring(0,2)});var $b=t.f,ac={querySelector:function(a){return this.__shady_native_querySelector(a)},querySelectorAll:function(a){return this.__shady_native_querySelectorAll(a)}},bc={};function cc(a){bc[a]=function(b){return b["__shady_native_"+a]}}function U(a,b){y(a,b,"__shady_native_");for(var c in b)cc(c)}function V(a,b){b=void 0===b?[]:b;for(var c=0;c<b.length;c++){var d=b[c],e=Object.getOwnPropertyDescriptor(a,d);e&&(Object.defineProperty(a,"__shady_native_"+d,e),e.value?ac[d]||(ac[d]=e.value):cc(d))}}
+var W=document.createTreeWalker(document,NodeFilter.SHOW_ALL,null,!1),X=document.createTreeWalker(document,NodeFilter.SHOW_ELEMENT,null,!1),dc=document.implementation.createHTMLDocument("inert");function ec(a){for(var b;b=a.__shady_native_firstChild;)a.__shady_native_removeChild(b)}var fc=["firstElementChild","lastElementChild","children","childElementCount"],gc=["querySelector","querySelectorAll"];
+function hc(){var a=["dispatchEvent","addEventListener","removeEventListener"];window.EventTarget?V(window.EventTarget.prototype,a):(V(Node.prototype,a),V(Window.prototype,a));$b?V(Node.prototype,"parentNode firstChild lastChild previousSibling nextSibling childNodes parentElement textContent".split(" ")):U(Node.prototype,{parentNode:{get:function(){W.currentNode=this;return W.parentNode()}},firstChild:{get:function(){W.currentNode=this;return W.firstChild()}},lastChild:{get:function(){W.currentNode=
+this;return W.lastChild()}},previousSibling:{get:function(){W.currentNode=this;return W.previousSibling()}},nextSibling:{get:function(){W.currentNode=this;return W.nextSibling()}},childNodes:{get:function(){var a=[];W.currentNode=this;for(var c=W.firstChild();c;)a.push(c),c=W.nextSibling();return a}},parentElement:{get:function(){X.currentNode=this;return X.parentNode()}},textContent:{get:function(){switch(this.nodeType){case Node.ELEMENT_NODE:case Node.DOCUMENT_FRAGMENT_NODE:for(var a=document.createTreeWalker(this,
+NodeFilter.SHOW_TEXT,null,!1),c="",d;d=a.nextNode();)c+=d.nodeValue;return c;default:return this.nodeValue}},set:function(a){if("undefined"===typeof a||null===a)a="";switch(this.nodeType){case Node.ELEMENT_NODE:case Node.DOCUMENT_FRAGMENT_NODE:ec(this);(0<a.length||this.nodeType===Node.ELEMENT_NODE)&&this.__shady_native_insertBefore(document.createTextNode(a),void 0);break;default:this.nodeValue=a}}}});V(Node.prototype,"appendChild insertBefore removeChild replaceChild cloneNode contains".split(" "));
+V(HTMLElement.prototype,["parentElement","contains"]);a={firstElementChild:{get:function(){X.currentNode=this;return X.firstChild()}},lastElementChild:{get:function(){X.currentNode=this;return X.lastChild()}},children:{get:function(){var a=[];X.currentNode=this;for(var c=X.firstChild();c;)a.push(c),c=X.nextSibling();return ta(a)}},childElementCount:{get:function(){return this.children?this.children.length:0}}};$b?(V(Element.prototype,fc),V(Element.prototype,["previousElementSibling","nextElementSibling",
+"innerHTML","className"]),V(HTMLElement.prototype,["children","innerHTML","className"])):(U(Element.prototype,a),U(Element.prototype,{previousElementSibling:{get:function(){X.currentNode=this;return X.previousSibling()}},nextElementSibling:{get:function(){X.currentNode=this;return X.nextSibling()}},innerHTML:{get:function(){return hb(this,va)},set:function(a){var b="template"===this.localName?this.content:this;ec(b);var d=this.localName||"div";d=this.namespaceURI&&this.namespaceURI!==dc.namespaceURI?
+dc.createElementNS(this.namespaceURI,d):dc.createElement(d);d.innerHTML=a;for(a="template"===this.localName?d.content:d;d=a.__shady_native_firstChild;)b.__shady_native_insertBefore(d,void 0)}},className:{get:function(){return this.getAttribute("class")||""},set:function(a){this.setAttribute("class",a)}}}));V(Element.prototype,"setAttribute getAttribute hasAttribute removeAttribute focus blur".split(" "));V(Element.prototype,gc);V(HTMLElement.prototype,["focus","blur"]);window.HTMLTemplateElement&&
+V(window.HTMLTemplateElement.prototype,["innerHTML"]);$b?V(DocumentFragment.prototype,fc):U(DocumentFragment.prototype,a);V(DocumentFragment.prototype,gc);$b?(V(Document.prototype,fc),V(Document.prototype,["activeElement"])):U(Document.prototype,a);V(Document.prototype,["importNode","getElementById"]);V(Document.prototype,gc)};var ic=z({dispatchEvent:function(a){B();return this.__shady_native_dispatchEvent(a)},addEventListener:Qb,removeEventListener:Sb});var jc=z({get assignedSlot(){var a=this.__shady_parentNode;(a=a&&a.__shady_shadowRoot)&&Q(a);return(a=r(this))&&a.assignedSlot||null}});var kc=null;function I(){kc||(kc=window.ShadyCSS&&window.ShadyCSS.ScopingShim);return kc||null}function Ta(a,b){var c=I();c&&c.unscopeNode(a,b)}function Ra(a,b){var c=I();if(!c)return!0;if(a.nodeType===Node.DOCUMENT_FRAGMENT_NODE){c=!0;for(a=a.__shady_firstChild;a;a=a.__shady_nextSibling)c=c&&Ra(a,b);return c}return a.nodeType!==Node.ELEMENT_NODE?!0:c.currentScopeForNode(a)===b}function H(a){if(a.nodeType!==Node.ELEMENT_NODE)return"";var b=I();return b?b.currentScopeForNode(a):""}
+function Sa(a,b){if(a)for(a.nodeType===Node.ELEMENT_NODE&&b(a),a=a.__shady_firstChild;a;a=a.__shady_nextSibling)a.nodeType===Node.ELEMENT_NODE&&Sa(a,b)};var lc=window.document;function mc(a,b){if("slot"===b)a=a.__shady_parentNode,ka(a)&&J(r(a).root);else if("slot"===a.localName&&"name"===b&&(b=G(a))){if(b.a){R(b);var c=a.O,d=sb(a);if(d!==c){c=b.b[c];var e=c.indexOf(a);0<=e&&c.splice(e,1);c=b.b[d]||(b.b[d]=[]);c.push(a);1<c.length&&(b.b[d]=tb(c))}}J(b)}}
+var nc=z({get previousElementSibling(){var a=r(this);if(a&&void 0!==a.previousSibling){for(a=this.__shady_previousSibling;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.__shady_previousSibling;return a}return this.__shady_native_previousElementSibling},get nextElementSibling(){var a=r(this);if(a&&void 0!==a.nextSibling){for(a=this.__shady_nextSibling;a&&a.nodeType!==Node.ELEMENT_NODE;)a=a.__shady_nextSibling;return a}return this.__shady_native_nextElementSibling},get slot(){return this.getAttribute("slot")},
+set slot(a){this.__shady_setAttribute("slot",a)},get shadowRoot(){var a=r(this);return a&&a.V||null},get className(){return this.getAttribute("class")||""},set className(a){this.__shady_setAttribute("class",a)},setAttribute:function(a,b){if(this.ownerDocument!==lc)this.__shady_native_setAttribute(a,b);else{var c;(c=I())&&"class"===a?(c.setElementClass(this,b),c=!0):c=!1;c||(this.__shady_native_setAttribute(a,b),mc(this,a))}},removeAttribute:function(a){this.__shady_native_removeAttribute(a);mc(this,
+a)},attachShadow:function(a){if(!this)throw Error("Must provide a host.");if(!a)throw Error("Not enough arguments.");if(a.shadyUpgradeFragment&&!t.L){var b=a.shadyUpgradeFragment;b.__proto__=ShadowRoot.prototype;ob(b,this,a);F(b,b);a=b.__noInsertionPoint?null:b.querySelectorAll("slot");b.__noInsertionPoint=void 0;if(a&&a.length){var c=b;Ua(c);c.c.push.apply(c.c,a instanceof Array?a:ca(ba(a)));J(b)}b.host.__shady_native_appendChild(b)}else b=new P(mb,this,a);return b}});var oc=z({blur:function(){var a=r(this);(a=(a=a&&a.root)&&a.activeElement)?a.__shady_blur():this.__shady_native_blur()}});Zb.forEach(function(a){oc[a]={set:function(b){var c=q(this),d=a.substring(2);c.h||(c.h={});c.h[a]&&this.removeEventListener(d,c.h[a]);this.__shady_addEventListener(d,b);c.h[a]=b},get:function(){var b=r(this);return b&&b.h&&b.h[a]},configurable:!0}});var pc=z({assignedNodes:function(a){if("slot"===this.localName){var b=this.__shady_getRootNode();b&&v(b)&&Q(b);return(b=r(this))?(a&&a.flatten?b.l:b.assignedNodes)||[]:[]}},addEventListener:function(a,b,c){if("slot"!==this.localName||"slotchange"===a)Qb.call(this,a,b,c);else{"object"!==typeof c&&(c={capture:!!c});var d=this.__shady_parentNode;if(!d)throw Error("ShadyDOM cannot attach event to slot unless it has a `parentNode`");c.i=this;d.__shady_addEventListener(a,b,c)}},removeEventListener:function(a,
+b,c){if("slot"!==this.localName||"slotchange"===a)Sb.call(this,a,b,c);else{"object"!==typeof c&&(c={capture:!!c});var d=this.__shady_parentNode;if(!d)throw Error("ShadyDOM cannot attach event to slot unless it has a `parentNode`");c.i=this;d.__shady_removeEventListener(a,b,c)}}});var qc=window.document,rc=z({importNode:function(a,b){if(a.ownerDocument!==qc||"template"===a.localName)return this.__shady_native_importNode(a,b);var c=this.__shady_native_importNode(a,!1);if(b)for(a=a.__shady_firstChild;a;a=a.__shady_nextSibling)b=this.__shady_importNode(a,!0),c.__shady_appendChild(b);return c}});var sc=z({addEventListener:Qb.bind(window),removeEventListener:Sb.bind(window)});var Y={};Object.getOwnPropertyDescriptor(HTMLElement.prototype,"parentElement")&&(Y.parentElement=L.parentElement);Object.getOwnPropertyDescriptor(HTMLElement.prototype,"contains")&&(Y.contains=L.contains);Object.getOwnPropertyDescriptor(HTMLElement.prototype,"children")&&(Y.children=M.children);Object.getOwnPropertyDescriptor(HTMLElement.prototype,"innerHTML")&&(Y.innerHTML=jb.innerHTML);Object.getOwnPropertyDescriptor(HTMLElement.prototype,"className")&&(Y.className=nc.className);
+var tc={EventTarget:[ic],Node:[L,window.EventTarget?null:ic],Text:[jc],Element:[nc,M,jc,!t.f||"innerHTML"in Element.prototype?jb:null,window.HTMLSlotElement?null:pc],HTMLElement:[oc,Y],HTMLSlotElement:[pc],DocumentFragment:[Za,$a],Document:[rc,Za,$a,ab],Window:[sc]},uc=t.f?null:["innerHTML","textContent"];function vc(a){var b=a?null:uc,c={},d;for(d in tc)c.s=window[d]&&window[d].prototype,tc[d].forEach(function(c){return function(d){return c.s&&d&&y(c.s,d,a,b)}}(c)),c={s:c.s}};function Z(a){this.node=a}m=Z.prototype;m.addEventListener=function(a,b,c){return this.node.__shady_addEventListener(a,b,c)};m.removeEventListener=function(a,b,c){return this.node.__shady_removeEventListener(a,b,c)};m.appendChild=function(a){return this.node.__shady_appendChild(a)};m.insertBefore=function(a,b){return this.node.__shady_insertBefore(a,b)};m.removeChild=function(a){return this.node.__shady_removeChild(a)};m.replaceChild=function(a,b){return this.node.__shady_replaceChild(a,b)};
+m.cloneNode=function(a){return this.node.__shady_cloneNode(a)};m.getRootNode=function(a){return this.node.__shady_getRootNode(a)};m.contains=function(a){return this.node.__shady_contains(a)};m.dispatchEvent=function(a){return this.node.__shady_dispatchEvent(a)};m.setAttribute=function(a,b){this.node.__shady_setAttribute(a,b)};m.getAttribute=function(a){return this.node.__shady_native_getAttribute(a)};m.removeAttribute=function(a){this.node.__shady_removeAttribute(a)};m.attachShadow=function(a){return this.node.__shady_attachShadow(a)};
+m.focus=function(){this.node.__shady_native_focus()};m.blur=function(){this.node.__shady_blur()};m.importNode=function(a,b){if(this.node.nodeType===Node.DOCUMENT_NODE)return this.node.__shady_importNode(a,b)};m.getElementById=function(a){if(this.node.nodeType===Node.DOCUMENT_NODE)return this.node.__shady_getElementById(a)};m.querySelector=function(a){return this.node.__shady_querySelector(a)};m.querySelectorAll=function(a,b){return this.node.__shady_querySelectorAll(a,b)};
+m.assignedNodes=function(a){if("slot"===this.node.localName)return this.node.__shady_assignedNodes(a)};
+da.Object.defineProperties(Z.prototype,{activeElement:{configurable:!0,enumerable:!0,get:function(){if(v(this.node)||this.node.nodeType===Node.DOCUMENT_NODE)return this.node.__shady_activeElement}},_activeElement:{configurable:!0,enumerable:!0,get:function(){return this.activeElement}},host:{configurable:!0,enumerable:!0,get:function(){if(v(this.node))return this.node.host}},parentNode:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_parentNode}},firstChild:{configurable:!0,
+enumerable:!0,get:function(){return this.node.__shady_firstChild}},lastChild:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_lastChild}},nextSibling:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_nextSibling}},previousSibling:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_previousSibling}},childNodes:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_childNodes}},parentElement:{configurable:!0,enumerable:!0,
+get:function(){return this.node.__shady_parentElement}},firstElementChild:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_firstElementChild}},lastElementChild:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_lastElementChild}},nextElementSibling:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_nextElementSibling}},previousElementSibling:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_previousElementSibling}},
+children:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_children}},childElementCount:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_childElementCount}},shadowRoot:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_shadowRoot}},assignedSlot:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_assignedSlot}},isConnected:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_isConnected}},innerHTML:{configurable:!0,
+enumerable:!0,get:function(){return this.node.__shady_innerHTML},set:function(a){this.node.__shady_innerHTML=a}},textContent:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_textContent},set:function(a){this.node.__shady_textContent=a}},slot:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_slot},set:function(a){this.node.__shady_slot=a}},className:{configurable:!0,enumerable:!0,get:function(){return this.node.__shady_className},set:function(a){return this.node.__shady_className=
+a}}});Zb.forEach(function(a){Object.defineProperty(Z.prototype,a,{get:function(){return this.node["__shady_"+a]},set:function(b){this.node["__shady_"+a]=b},configurable:!0})});var wc=new WeakMap;function xc(a){if(v(a)||a instanceof Z)return a;var b=wc.get(a);b||(b=new Z(a),wc.set(a,b));return b};t.F&&(window.ShadyDOM={inUse:t.F,patch:function(a){Ea(a);Da(a);return a},isShadyRoot:v,enqueue:ya,flush:B,flushInitial:function(a){!a.G&&a.j&&Q(a)},settings:t,filterMutations:Ab,observeChildren:yb,unobserveChildren:zb,deferConnectionCallbacks:t.deferConnectionCallbacks,preferPerformance:t.preferPerformance,handlesDynamicScoping:!0,wrap:t.g?xc:function(a){return a},Wrapper:Z,composedPath:Ib,noPatch:t.g,nativeMethods:ac,nativeTree:bc},hc(),vc("__shady_"),Object.defineProperty(document,"_activeElement",
+ab.activeElement),y(Window.prototype,sc,"__shady_"),t.g||(vc(),Yb()),Tb(),window.Event=Vb,window.CustomEvent=Wb,window.MouseEvent=Xb,window.ShadowRoot=P);}).call(this);
 
 //# sourceMappingURL=shadydom.min.js.map
 
@@ -14798,6 +15212,69 @@ const PolymerElement = Object(__WEBPACK_IMPORTED_MODULE_0__lib_mixins_element_mi
 
 /***/ }),
 
+/***/ "nzqX":
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+/* unused harmony export instanceCount */
+/* harmony export (immutable) */ __webpack_exports__["a"] = incrementInstanceCount;
+/* harmony export (immutable) */ __webpack_exports__["b"] = register;
+/* unused harmony export dumpRegistrations */
+/**
+@license
+Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+*/
+
+/**
+ * Total number of Polymer element instances created.
+ * @type {number}
+ */
+let instanceCount = 0;
+
+function incrementInstanceCount() {
+  instanceCount++;
+}
+
+/**
+ * Array of Polymer element classes that have been finalized.
+ * @type {!Array<!PolymerElementConstructor>}
+ */
+const registrations = [];
+/* unused harmony export registrations */
+
+
+/**
+ * @param {!PolymerElementConstructor} prototype Element prototype to log
+ * @private
+ */
+function _regLog(prototype) {
+  console.log('[' + /** @type {?} */(prototype).is + ']: registered');
+}
+
+/**
+ * Registers a class prototype for telemetry purposes.
+ * @param {!PolymerElementConstructor} prototype Element prototype to register
+ * @protected
+ */
+function register(prototype) {
+  registrations.push(prototype);
+}
+
+/**
+ * Logs all elements registered with an `is` to the console.
+ * @public
+ */
+function dumpRegistrations() {
+  registrations.forEach(_regLog);
+}
+
+/***/ }),
+
 /***/ "p0Pl":
 /***/ (function(module, __webpack_exports__, __webpack_require__) {
 
@@ -15013,6 +15490,39 @@ const dedupingMixin = function(mixin) {
 /* harmony export (immutable) */ __webpack_exports__["a"] = dedupingMixin;
 
 /* eslint-enable valid-jsdoc */
+
+
+/***/ }),
+
+/***/ "ptGG":
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+/**
+@license
+Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+*/
+
+/* eslint-disable valid-jsdoc */
+/**
+ * Node wrapper to ensure ShadowDOM safe operation regardless of polyfill
+ * presence or mode. Note that with the introduction of `ShadyDOM.noPatch`,
+ * a node wrapper must be used to access ShadowDOM API.
+ * This is similar to using `Polymer.dom` but relies exclusively
+ * on the presence of the ShadyDOM polyfill rather than requiring the loading
+ * of legacy (Polymer.dom) API.
+ * @type {function(Node):Node}
+ */
+const wrap = (window['ShadyDOM'] && window['ShadyDOM']['noPatch'] && window['ShadyDOM']['wrap']) ?
+  window['ShadyDOM']['wrap'] : (n) => n;
+/* harmony export (immutable) */ __webpack_exports__["a"] = wrap;
+
+
 
 
 /***/ }),
@@ -15359,16 +15869,18 @@ function saveAccessorValue(model, property) {
  *
  * For basic usage of this mixin:
  *
- * -   Declare attributes to observe via the standard `static get observedAttributes()`. Use
- *     `dash-case` attribute names to represent `camelCase` property names.
+ * -   Declare attributes to observe via the standard `static get
+ *     observedAttributes()`. Use `dash-case` attribute names to represent
+ *     `camelCase` property names.
  * -   Implement the `_propertiesChanged` callback on the class.
- * -   Call `MyClass.createPropertiesForAttributes()` **once** on the class to generate
- *     property accessors for each observed attribute. This must be called before the first
- *     instance is created, for example, by calling it before calling `customElements.define`.
- *     It can also be called lazily from the element's `constructor`, as long as it's guarded so
- *     that the call is only made once, when the first instance is created.
- * -   Call `this._enableProperties()` in the element's `connectedCallback` to enable
- *     the accessors.
+ * -   Call `MyClass.createPropertiesForAttributes()` **once** on the class to
+ *     generate property accessors for each observed attribute. This must be
+ *     called before the first instance is created, for example, by calling it
+ *     before calling `customElements.define`. It can also be called lazily from
+ *     the element's `constructor`, as long as it's guarded so that the call is
+ *     only made once, when the first instance is created.
+ * -   Call `this._enableProperties()` in the element's `connectedCallback` to
+ *     enable the accessors.
  *
  * Any `observedAttributes` will automatically be
  * deserialized via `attributeChangedCallback` and set to the associated
@@ -15384,7 +15896,6 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
 
   /**
    * @constructor
-   * @extends {superClass}
    * @implements {Polymer_PropertiesChanged}
    * @unrestricted
    * @private
@@ -15435,6 +15946,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      *
      * @return {void}
      * @protected
+     * @override
      */
     _initializeProperties() {
       if (this.__dataProto) {
@@ -15456,6 +15968,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      *   when creating property accessors.
      * @return {void}
      * @protected
+     * @override
      */
     _initializeProtoProperties(props) {
       for (let p in props) {
@@ -15467,11 +15980,13 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * Ensures the element has the given attribute. If it does not,
      * assigns the given value to the attribute.
      *
-     * @suppress {invalidCasts} Closure can't figure out `this` is infact an element
+     * @suppress {invalidCasts} Closure can't figure out `this` is infact an
+     *     element
      *
      * @param {string} attribute Name of attribute to ensure is set.
      * @param {string} value of the attribute.
      * @return {void}
+     * @override
      */
     _ensureAttribute(attribute, value) {
       const el = /** @type {!HTMLElement} */(this);
@@ -15484,7 +15999,9 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * Overrides PropertiesChanged implemention to serialize objects as JSON.
      *
      * @param {*} value Property value to serialize.
-     * @return {string | undefined} String serialized from the provided property value.
+     * @return {string | undefined} String serialized from the provided property
+     *     value.
+     * @override
      */
     _serializeValue(value) {
       /* eslint-disable no-fallthrough */
@@ -15519,6 +16036,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * @param {?string} value Attribute value to deserialize.
      * @param {*=} type Type to deserialize the string to.
      * @return {*} Typed value deserialized from the provided string.
+     * @override
      */
     _deserializeValue(value, type) {
       /**
@@ -15568,6 +16086,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * for the values to take effect.
      * @protected
      * @return {void}
+     * @override
      */
     _definePropertyAccessor(property, readOnly) {
       saveAccessorValue(this, property);
@@ -15579,6 +16098,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      *
      * @param {string} property Property name
      * @return {boolean} True if an accessor was created
+     * @override
      */
     _hasAccessor(property) {
       return this.__dataHasAccessor && this.__dataHasAccessor[property];
@@ -15590,6 +16110,7 @@ const PropertyAccessors = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["
      * @param {string} prop Property name
      * @return {boolean} True if property has a pending change
      * @protected
+     * @override
      */
     _isPropertyPending(prop) {
       return Boolean(this.__dataPending && (prop in this.__dataPending));
@@ -16736,21 +17257,24 @@ var __WEBPACK_AMD_DEFINE_RESULT__;;(function () {
 
 "use strict";
 /* harmony import */ var __WEBPACK_IMPORTED_MODULE_0__utils_boot_js__ = __webpack_require__("mMs9");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__ = __webpack_require__("pmVh");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__utils_path_js__ = __webpack_require__("uGBT");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__utils_case_map_js__ = __webpack_require__("URXx");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__property_accessors_js__ = __webpack_require__("teTY");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_5__template_stamp_js__ = __webpack_require__("Tlfv");
-/* harmony import */ var __WEBPACK_IMPORTED_MODULE_6__utils_settings_js__ = __webpack_require__("TfZJ");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_1__utils_wrap_js__ = __webpack_require__("ptGG");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__ = __webpack_require__("pmVh");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_3__utils_path_js__ = __webpack_require__("uGBT");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_4__utils_case_map_js__ = __webpack_require__("URXx");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_5__property_accessors_js__ = __webpack_require__("teTY");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_6__template_stamp_js__ = __webpack_require__("Tlfv");
+/* harmony import */ var __WEBPACK_IMPORTED_MODULE_7__utils_settings_js__ = __webpack_require__("TfZJ");
 /**
-@license
-Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
-This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
-The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
-The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
-Code distributed by Google as part of the polymer project is also
-subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
-*/
+ * @fileoverview
+ * @suppress {checkPrototypalTypes}
+ * @license Copyright (c) 2017 The Polymer Project Authors. All rights reserved.
+ * This code may only be used under the BSD style license found at
+ * http://polymer.github.io/LICENSE.txt The complete set of authors may be found
+ * at http://polymer.github.io/AUTHORS.txt The complete set of contributors may
+ * be found at http://polymer.github.io/CONTRIBUTORS.txt Code distributed by
+ * Google as part of the polymer project is also subject to an additional IP
+ * rights grant found at http://polymer.github.io/PATENTS.txt
+ */
 
 
 
@@ -16780,7 +17304,7 @@ const TYPES = {
   READ_ONLY: '__readOnly'
 };
 
-/** @const {RegExp} */
+/** @const {!RegExp} */
 const capitalAttributeRegex = /[A-Z]/;
 
 /**
@@ -16800,8 +17324,6 @@ let DataTrigger; //eslint-disable-line no-unused-vars
  * }}
  */
 let DataEffect; //eslint-disable-line no-unused-vars
-
-let PropertyEffectsType; //eslint-disable-line no-unused-vars
 
 /**
  * Ensures that the model has an own-property map of effects for the given type.
@@ -16848,10 +17370,10 @@ function ensureOwnEffectMap(model, type) {
  * Runs all effects of a given type for the given set of property changes
  * on an instance.
  *
- * @param {!PropertyEffectsType} inst The instance with effects to run
- * @param {Object} effects Object map of property-to-Array of effects
- * @param {Object} props Bag of current property changes
- * @param {Object=} oldProps Bag of previous values for changed properties
+ * @param {!Polymer_PropertyEffects} inst The instance with effects to run
+ * @param {?Object} effects Object map of property-to-Array of effects
+ * @param {?Object} props Bag of current property changes
+ * @param {?Object=} oldProps Bag of previous values for changed properties
  * @param {boolean=} hasPaths True with `props` contains one or more paths
  * @param {*=} extraArgs Additional metadata to pass to effect function
  * @return {boolean} True if an effect ran for this property
@@ -16862,7 +17384,9 @@ function runEffects(inst, effects, props, oldProps, hasPaths, extraArgs) {
     let ran = false;
     let id = dedupeId++;
     for (let prop in props) {
-      if (runEffectsForProperty(inst, effects, id, prop, props, oldProps, hasPaths, extraArgs)) {
+      if (runEffectsForProperty(
+              inst, /** @type {!Object} */ (effects), id, prop, props, oldProps,
+              hasPaths, extraArgs)) {
         ran = true;
       }
     }
@@ -16874,8 +17398,8 @@ function runEffects(inst, effects, props, oldProps, hasPaths, extraArgs) {
 /**
  * Runs a list of effects for a given property.
  *
- * @param {!PropertyEffectsType} inst The instance with effects to run
- * @param {Object} effects Object map of property-to-Array of effects
+ * @param {!Polymer_PropertyEffects} inst The instance with effects to run
+ * @param {!Object} effects Object map of property-to-Array of effects
  * @param {number} dedupeId Counter used for de-duping effects
  * @param {string} prop Name of changed property
  * @param {*} props Changed properties
@@ -16887,7 +17411,7 @@ function runEffects(inst, effects, props, oldProps, hasPaths, extraArgs) {
  */
 function runEffectsForProperty(inst, effects, dedupeId, prop, props, oldProps, hasPaths, extraArgs) {
   let ran = false;
-  let rootProperty = hasPaths ? Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["f" /* root */])(prop) : prop;
+  let rootProperty = hasPaths ? Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["f" /* root */])(prop) : prop;
   let fxs = effects[rootProperty];
   if (fxs) {
     for (let i=0, l=fxs.length, fx; (i<l) && (fx=fxs[i]); i++) {
@@ -16919,15 +17443,15 @@ function runEffectsForProperty(inst, effects, dedupeId, prop, props, oldProps, h
  * If no trigger is given, the path is deemed to match.
  *
  * @param {string} path Path or property that changed
- * @param {DataTrigger} trigger Descriptor
+ * @param {?DataTrigger} trigger Descriptor
  * @return {boolean} Whether the path matched the trigger
  */
 function pathMatchesTrigger(path, trigger) {
   if (trigger) {
-    let triggerPath = trigger.name;
+    let triggerPath = /** @type {string} */ (trigger.name);
     return (triggerPath == path) ||
-      (trigger.structured && Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["b" /* isAncestor */])(triggerPath, path)) ||
-      (trigger.wildcard && Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["c" /* isDescendant */])(triggerPath, path));
+        !!(trigger.structured && Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["b" /* isAncestor */])(triggerPath, path)) ||
+        !!(trigger.wildcard && Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["c" /* isDescendant */])(triggerPath, path));
   } else {
     return true;
   }
@@ -16939,7 +17463,7 @@ function pathMatchesTrigger(path, trigger) {
  * Calls the method with `info.methodName` on the instance, passing the
  * new and old values.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} property Name of property
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -16967,7 +17491,7 @@ function runObserverEffect(inst, property, props, oldProps, info) {
  * `notify: true` to ensure object sub-property notifications were
  * sent.
  *
- * @param {!PropertyEffectsType} inst The instance with effects to run
+ * @param {!Polymer_PropertyEffects} inst The instance with effects to run
  * @param {Object} notifyProps Bag of properties to notify
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -17003,16 +17527,17 @@ function runNotifyEffects(inst, notifyProps, props, oldProps, hasPaths) {
  * Dispatches {property}-changed events with path information in the detail
  * object to indicate a sub-path of the property was changed.
  *
- * @param {!PropertyEffectsType} inst The element from which to fire the event
+ * @param {!Polymer_PropertyEffects} inst The element from which to fire the
+ *     event
  * @param {string} path The path that was changed
  * @param {Object} props Bag of current property changes
  * @return {boolean} Returns true if the path was notified
  * @private
  */
 function notifyPath(inst, path, props) {
-  let rootProperty = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["f" /* root */])(path);
+  let rootProperty = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["f" /* root */])(path);
   if (rootProperty !== path) {
-    let eventName = Object(__WEBPACK_IMPORTED_MODULE_3__utils_case_map_js__["a" /* camelToDashCase */])(rootProperty) + '-changed';
+    let eventName = Object(__WEBPACK_IMPORTED_MODULE_4__utils_case_map_js__["a" /* camelToDashCase */])(rootProperty) + '-changed';
     dispatchNotifyEvent(inst, eventName, props[path], path);
     return true;
   }
@@ -17023,11 +17548,13 @@ function notifyPath(inst, path, props) {
  * Dispatches {property}-changed events to indicate a property (or path)
  * changed.
  *
- * @param {!PropertyEffectsType} inst The element from which to fire the event
- * @param {string} eventName The name of the event to send ('{property}-changed')
+ * @param {!Polymer_PropertyEffects} inst The element from which to fire the
+ *     event
+ * @param {string} eventName The name of the event to send
+ *     ('{property}-changed')
  * @param {*} value The value of the changed property
- * @param {string | null | undefined} path If a sub-path of this property changed, the path
- *   that changed (optional).
+ * @param {string | null | undefined} path If a sub-path of this property
+ *     changed, the path that changed (optional).
  * @return {void}
  * @private
  * @suppress {invalidCasts}
@@ -17040,7 +17567,7 @@ function dispatchNotifyEvent(inst, eventName, value, path) {
   if (path) {
     detail.path = path;
   }
-  /** @type {!HTMLElement} */(inst).dispatchEvent(new CustomEvent(eventName, { detail }));
+  Object(__WEBPACK_IMPORTED_MODULE_1__utils_wrap_js__["a" /* wrap */])(/** @type {!HTMLElement} */(inst)).dispatchEvent(new CustomEvent(eventName, { detail }));
 }
 
 /**
@@ -17049,7 +17576,7 @@ function dispatchNotifyEvent(inst, eventName, value, path) {
  * Dispatches a non-bubbling event named `info.eventName` on the instance
  * with a detail object containing the new `value`.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} property Name of property
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -17059,9 +17586,9 @@ function dispatchNotifyEvent(inst, eventName, value, path) {
  * @private
  */
 function runNotifyEffect(inst, property, props, oldProps, info, hasPaths) {
-  let rootProperty = hasPaths ? Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["f" /* root */])(property) : property;
+  let rootProperty = hasPaths ? Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["f" /* root */])(property) : property;
   let path = rootProperty != property ? property : null;
-  let value = path ? Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(inst, path) : inst.__data[property];
+  let value = path ? Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(inst, path) : inst.__data[property];
   if (path && value === undefined) {
     value = props[property];  // specifically for .splices
   }
@@ -17078,7 +17605,8 @@ function runNotifyEffect(inst, property, props, oldProps, info, hasPaths) {
  * scope's name for that path first.
  *
  * @param {CustomEvent} event Notification event (e.g. '<property>-changed')
- * @param {!PropertyEffectsType} inst Host element instance handling the notification event
+ * @param {!Polymer_PropertyEffects} inst Host element instance handling the
+ *     notification event
  * @param {string} fromProp Child element property that was bound
  * @param {string} toPath Host property/path that was bound
  * @param {boolean} negate Whether the binding was negated
@@ -17090,7 +17618,7 @@ function handleNotification(event, inst, fromProp, toPath, negate) {
   let detail = /** @type {Object} */(event.detail);
   let fromPath = detail && detail.path;
   if (fromPath) {
-    toPath = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["h" /* translate */])(fromProp, toPath, fromPath);
+    toPath = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["h" /* translate */])(fromProp, toPath, fromPath);
     value = detail && detail.value;
   } else {
     value = event.currentTarget[fromProp];
@@ -17109,7 +17637,7 @@ function handleNotification(event, inst, fromProp, toPath, negate) {
  *
  * Sets the attribute named `info.attrName` to the given property value.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} property Name of property
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -17119,8 +17647,8 @@ function handleNotification(event, inst, fromProp, toPath, negate) {
  */
 function runReflectEffect(inst, property, props, oldProps, info) {
   let value = inst.__data[property];
-  if (__WEBPACK_IMPORTED_MODULE_6__utils_settings_js__["c" /* sanitizeDOMValue */]) {
-    value = Object(__WEBPACK_IMPORTED_MODULE_6__utils_settings_js__["c" /* sanitizeDOMValue */])(value, info.attrName, 'attribute', /** @type {Node} */(inst));
+  if (__WEBPACK_IMPORTED_MODULE_7__utils_settings_js__["d" /* sanitizeDOMValue */]) {
+    value = Object(__WEBPACK_IMPORTED_MODULE_7__utils_settings_js__["d" /* sanitizeDOMValue */])(value, info.attrName, 'attribute', /** @type {Node} */(inst));
   }
   inst._propertyToAttribute(property, info.attrName, value);
 }
@@ -17135,9 +17663,9 @@ function runReflectEffect(inst, property, props, oldProps, info) {
  * computed before other effects (binding propagation, observers, and notify)
  * run.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
- * @param {!Object} changedProps Bag of changed properties
- * @param {!Object} oldProps Bag of previous values for changed properties
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
+ * @param {?Object} changedProps Bag of changed properties
+ * @param {?Object} oldProps Bag of previous values for changed properties
  * @param {boolean} hasPaths True with `props` contains one or more paths
  * @return {void}
  * @private
@@ -17147,8 +17675,8 @@ function runComputedEffects(inst, changedProps, oldProps, hasPaths) {
   if (computeEffects) {
     let inputProps = changedProps;
     while (runEffects(inst, computeEffects, inputProps, oldProps, hasPaths)) {
-      Object.assign(oldProps, inst.__dataOld);
-      Object.assign(changedProps, inst.__dataPending);
+      Object.assign(/** @type {!Object} */ (oldProps), inst.__dataOld);
+      Object.assign(/** @type {!Object} */ (changedProps), inst.__dataPending);
       inputProps = inst.__dataPending;
       inst.__dataPending = null;
     }
@@ -17160,10 +17688,10 @@ function runComputedEffects(inst, changedProps, oldProps, hasPaths) {
  * values of the arguments specified in the `info` object and setting the
  * return value to the computed property specified.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} property Name of property
- * @param {Object} props Bag of current property changes
- * @param {Object} oldProps Bag of previous values for changed properties
+ * @param {?Object} props Bag of current property changes
+ * @param {?Object} oldProps Bag of previous values for changed properties
  * @param {?} info Effect metadata
  * @return {void}
  * @private
@@ -17182,8 +17710,8 @@ function runComputedEffect(inst, property, props, oldProps, info) {
  * Computes path changes based on path links set up using the `linkPaths`
  * API.
  *
- * @param {!PropertyEffectsType} inst The instance whose props are changing
- * @param {string | !Array<(string|number)>} path Path that has changed
+ * @param {!Polymer_PropertyEffects} inst The instance whose props are changing
+ * @param {string} path Path that has changed
  * @param {*} value Value of changed path
  * @return {void}
  * @private
@@ -17194,11 +17722,11 @@ function computeLinkedPaths(inst, path, value) {
     let link;
     for (let a in links) {
       let b = links[a];
-      if (Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["c" /* isDescendant */])(a, path)) {
-        link = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["h" /* translate */])(a, b, path);
+      if (Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["c" /* isDescendant */])(a, path)) {
+        link = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["h" /* translate */])(a, b, path);
         inst._setPendingPropertyOrPath(link, value, true, true);
-      } else if (Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["c" /* isDescendant */])(b, path)) {
-        link = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["h" /* translate */])(b, a, path);
+      } else if (Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["c" /* isDescendant */])(b, path)) {
+        link = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["h" /* translate */])(b, a, path);
         inst._setPendingPropertyOrPath(link, value, true, true);
       }
     }
@@ -17232,7 +17760,7 @@ function addBinding(constructor, templateInfo, nodeInfo, kind, target, parts, li
   // Add listener info to binding metadata
   if (shouldAddListener(binding)) {
     let {event, negate} = binding.parts[0];
-    binding.listenerEvent = event || (Object(__WEBPACK_IMPORTED_MODULE_3__utils_case_map_js__["a" /* camelToDashCase */])(target) + '-changed');
+    binding.listenerEvent = event || (Object(__WEBPACK_IMPORTED_MODULE_4__utils_case_map_js__["a" /* camelToDashCase */])(target) + '-changed');
     binding.listenerNegate = negate;
   }
   // Add "propagate" property effects to templateInfo
@@ -17288,7 +17816,7 @@ function addEffectForBindingPart(constructor, templateInfo, binding, part, index
  * there is no support for _path_ bindings via custom binding parts,
  * as this is specific to Polymer's path binding syntax.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} path Name of property
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -17310,7 +17838,7 @@ function runBindingEffect(inst, path, props, oldProps, info, hasPaths, nodeList)
       node.__isPropertyEffectsClient &&
       node.__dataHasAccessor && node.__dataHasAccessor[binding.target]) {
     let value = props[path];
-    path = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["h" /* translate */])(part.source, binding.target, path);
+    path = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["h" /* translate */])(part.source, binding.target, path);
     if (node._setPendingPropertyOrPath(path, value, false, true)) {
       inst._enqueueClient(node);
     }
@@ -17325,7 +17853,7 @@ function runBindingEffect(inst, path, props, oldProps, info, hasPaths, nodeList)
  * Sets the value for an "binding" (binding) effect to a node,
  * either as a property or attribute.
  *
- * @param {!PropertyEffectsType} inst The instance owning the binding effect
+ * @param {!Polymer_PropertyEffects} inst The instance owning the binding effect
  * @param {Node} node Target node for binding
  * @param {!Binding} binding Binding metadata
  * @param {!BindingPart} part Binding part metadata
@@ -17335,8 +17863,8 @@ function runBindingEffect(inst, path, props, oldProps, info, hasPaths, nodeList)
  */
 function applyBindingValue(inst, node, binding, part, value) {
   value = computeBindingValue(node, value, binding, part);
-  if (__WEBPACK_IMPORTED_MODULE_6__utils_settings_js__["c" /* sanitizeDOMValue */]) {
-    value = Object(__WEBPACK_IMPORTED_MODULE_6__utils_settings_js__["c" /* sanitizeDOMValue */])(value, binding.target, binding.kind, node);
+  if (__WEBPACK_IMPORTED_MODULE_7__utils_settings_js__["d" /* sanitizeDOMValue */]) {
+    value = Object(__WEBPACK_IMPORTED_MODULE_7__utils_settings_js__["d" /* sanitizeDOMValue */])(value, binding.target, binding.kind, node);
   }
   if (binding.kind == 'attribute') {
     // Attribute binding
@@ -17410,7 +17938,8 @@ function shouldAddListener(binding) {
  * Setup compound binding storage structures, notify listeners, and dataHost
  * references onto the bound nodeList.
  *
- * @param {!PropertyEffectsType} inst Instance that bas been previously bound
+ * @param {!Polymer_PropertyEffects} inst Instance that bas been previously
+ *     bound
  * @param {TemplateInfo} templateInfo Template metadata
  * @return {void}
  * @private
@@ -17473,7 +18002,8 @@ function setupCompoundStorage(node, binding) {
  * Adds a 2-way binding notification event listener to the node specified
  *
  * @param {Object} node Child element to add listener to
- * @param {!PropertyEffectsType} inst Host element instance to handle notification event
+ * @param {!Polymer_PropertyEffects} inst Host element instance to handle
+ *     notification event
  * @param {Binding} binding Binding metadata
  * @return {void}
  * @private
@@ -17537,7 +18067,7 @@ function createMethodEffect(model, sig, type, effectFn, methodInfo, dynamicFn) {
  * functions call this function to invoke the method, then use the return
  * value accordingly.
  *
- * @param {!PropertyEffectsType} inst The instance the effect will be run on
+ * @param {!Polymer_PropertyEffects} inst The instance the effect will be run on
  * @param {string} property Name of property
  * @param {Object} props Bag of current property changes
  * @param {Object} oldProps Bag of previous values for changed properties
@@ -17694,9 +18224,9 @@ function parseArg(rawArg) {
   }
   // if not literal, look for structured path
   if (!a.literal) {
-    a.rootProperty = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["f" /* root */])(arg);
+    a.rootProperty = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["f" /* root */])(arg);
     // detect structured path (has dots)
-    a.structured = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["d" /* isPath */])(arg);
+    a.structured = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["d" /* isPath */])(arg);
     if (a.structured) {
       a.wildcard = (arg.slice(-2) == '.*');
       if (a.wildcard) {
@@ -17707,6 +18237,19 @@ function parseArg(rawArg) {
   return a;
 }
 
+function getArgValue(data, props, path) {
+  let value = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(data, path);
+  // when data is not stored e.g. `splices`, get the value from changedProps
+  // TODO(kschaaf): Note, this can cause a rare issue where the wildcard
+  // info.value could pull a stale value out of changedProps during a reentrant
+  // change that sets the value back to undefined.
+  // https://github.com/Polymer/polymer/issues/5479
+  if (value === undefined) {
+    value = props[path];
+  }
+  return value;
+}
+
 // data api
 
 /**
@@ -17714,7 +18257,7 @@ function parseArg(rawArg) {
  *
  * Note: this implementation only accepts normalized paths
  *
- * @param {!PropertyEffectsType} inst Instance to send notifications to
+ * @param {!Polymer_PropertyEffects} inst Instance to send notifications to
  * @param {Array} array The array the mutations occurred on
  * @param {string} path The path to the array that was mutated
  * @param {Array} splices Array of splice records
@@ -17722,11 +18265,8 @@ function parseArg(rawArg) {
  * @private
  */
 function notifySplices(inst, array, path, splices) {
-  let splicesPath = path + '.splices';
-  inst.notifyPath(splicesPath, { indexSplices: splices });
+  inst.notifyPath(path + '.splices', { indexSplices: splices });
   inst.notifyPath(path + '.length', array.length);
-  // Null here to allow potentially large splice records to be GC'ed.
-  inst.__data[splicesPath] = {indexSplices: null};
 }
 
 /**
@@ -17735,7 +18275,7 @@ function notifySplices(inst, array, path, splices) {
  *
  * Note: this implementation only accepts normalized paths
  *
- * @param {!PropertyEffectsType} inst Instance to send notifications to
+ * @param {!Polymer_PropertyEffects} inst Instance to send notifications to
  * @param {Array} array The array the mutations occurred on
  * @param {string} path The path to the array that was mutated
  * @param {number} index Index at which the array mutation occurred
@@ -17800,17 +18340,16 @@ function upper(name) {
  * @summary Element class mixin that provides meta-programming for Polymer's
  * template binding and data observation system.
  */
-const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a" /* dedupingMixin */])(superClass => {
+const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_2__utils_mixin_js__["a" /* dedupingMixin */])(superClass => {
 
   /**
    * @constructor
-   * @extends {superClass}
    * @implements {Polymer_PropertyAccessors}
    * @implements {Polymer_TemplateStamp}
    * @unrestricted
    * @private
    */
-  const propertyEffectsBase = Object(__WEBPACK_IMPORTED_MODULE_5__template_stamp_js__["a" /* TemplateStamp */])(Object(__WEBPACK_IMPORTED_MODULE_4__property_accessors_js__["a" /* PropertyAccessors */])(superClass));
+  const propertyEffectsBase = Object(__WEBPACK_IMPORTED_MODULE_6__template_stamp_js__["a" /* TemplateStamp */])(Object(__WEBPACK_IMPORTED_MODULE_5__property_accessors_js__["a" /* PropertyAccessors */])(superClass));
 
   /**
    * @polymer
@@ -17851,7 +18390,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
       this.__dataClientsInitialized;
       /** @type {!Object} */
       this.__data;
-      /** @type {!Object} */
+      /** @type {!Object|null} */
       this.__dataPending;
       /** @type {!Object} */
       this.__dataOld;
@@ -17876,6 +18415,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     }
 
     /**
+     * @override
      * @return {void}
      */
     _initializeProperties() {
@@ -17934,6 +18474,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Property that should trigger the effect
      * @param {string} type Effect type, from this.PROPERTY_EFFECT_TYPES
      * @param {Object=} effect Effect metadata object
@@ -17953,6 +18494,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     /**
      * Removes the given property effect.
      *
+     * @override
      * @param {string} property Property the effect was associated with
      * @param {string} type Effect type, from this.PROPERTY_EFFECT_TYPES
      * @param {Object=} effect Effect metadata object to remove
@@ -17970,9 +18512,11 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Returns whether the current prototype/instance has a property effect
      * of a certain type.
      *
+     * @override
      * @param {string} property Property name
      * @param {string=} type Effect type, from this.PROPERTY_EFFECT_TYPES
-     * @return {boolean} True if the prototype/instance has an effect of this type
+     * @return {boolean} True if the prototype/instance has an effect of this
+     *     type
      * @protected
      */
     _hasPropertyEffect(property, type) {
@@ -17984,8 +18528,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Returns whether the current prototype/instance has a "read only"
      * accessor for the given property.
      *
+     * @override
      * @param {string} property Property name
-     * @return {boolean} True if the prototype/instance has an effect of this type
+     * @return {boolean} True if the prototype/instance has an effect of this
+     *     type
      * @protected
      */
     _hasReadOnlyEffect(property) {
@@ -17996,8 +18542,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Returns whether the current prototype/instance has a "notify"
      * property effect for the given property.
      *
+     * @override
      * @param {string} property Property name
-     * @return {boolean} True if the prototype/instance has an effect of this type
+     * @return {boolean} True if the prototype/instance has an effect of this
+     *     type
      * @protected
      */
     _hasNotifyEffect(property) {
@@ -18005,11 +18553,13 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     }
 
     /**
-     * Returns whether the current prototype/instance has a "reflect to attribute"
-     * property effect for the given property.
+     * Returns whether the current prototype/instance has a "reflect to
+     * attribute" property effect for the given property.
      *
+     * @override
      * @param {string} property Property name
-     * @return {boolean} True if the prototype/instance has an effect of this type
+     * @return {boolean} True if the prototype/instance has an effect of this
+     *     type
      * @protected
      */
     _hasReflectEffect(property) {
@@ -18020,8 +18570,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Returns whether the current prototype/instance has a "computed"
      * property effect for the given property.
      *
+     * @override
      * @param {string} property Property name
-     * @return {boolean} True if the prototype/instance has an effect of this type
+     * @return {boolean} True if the prototype/instance has an effect of this
+     *     type
      * @protected
      */
     _hasComputedEffect(property) {
@@ -18045,6 +18597,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * `path` can be a path string or array of path parts as accepted by the
      * public API.
      *
+     * @override
      * @param {string | !Array<number|string>} path Path to set
      * @param {*} value Value to set
      * @param {boolean=} shouldNotify Set to true if this change should
@@ -18060,7 +18613,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      */
     _setPendingPropertyOrPath(path, value, shouldNotify, isPathNotification) {
       if (isPathNotification ||
-          Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["f" /* root */])(Array.isArray(path) ? path[0] : path) !== path) {
+          Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["f" /* root */])(Array.isArray(path) ? path[0] : path) !== path) {
         // Dirty check changes being set to a path against the actual object,
         // since this is the entry point for paths into the system; from here
         // the only dirty checks are against the `__dataTemp` cache to prevent
@@ -18070,8 +18623,8 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
         // already dirty checked at the point of entry and the underlying
         // object has already been updated
         if (!isPathNotification) {
-          let old = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path);
-          path = /** @type {string} */ (Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["g" /* set */])(this, path, value));
+          let old = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path);
+          path = /** @type {string} */ (Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["g" /* set */])(this, path, value));
           // Use property-accessor's simpler dirty check
           if (!path || !super._shouldPropertyChange(path, value, old)) {
             return false;
@@ -18079,7 +18632,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
         }
         this.__dataHasPaths = true;
         if (this._setPendingProperty(/**@type{string}*/(path), value, shouldNotify)) {
-          computeLinkedPaths(this, path, value);
+          computeLinkedPaths(this, /**@type{string}*/ (path), value);
           return true;
         }
       } else {
@@ -18107,6 +18660,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      *
      * Users may override this method to provide alternate approaches.
      *
+     * @override
      * @param {!Node} node The node to set a property on
      * @param {string} prop The property to set
      * @param {*} value The value to set
@@ -18159,7 +18713,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * @return {boolean} Returns true if the property changed
      */
     _setPendingProperty(property, value, shouldNotify) {
-      let propIsPath = this.__dataHasPaths && Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["d" /* isPath */])(property);
+      let propIsPath = this.__dataHasPaths && Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["d" /* isPath */])(property);
       let prevProps = propIsPath ? this.__dataTemp : this.__data;
       if (this._shouldPropertyChange(property, value, prevProps[property])) {
         if (!this.__dataPending) {
@@ -18224,6 +18778,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * pending property changes can later be flushed via a call to
      * `_flushClients`.
      *
+     * @override
      * @param {Object} client PropertyEffects client to enqueue
      * @return {void}
      * @protected
@@ -18238,6 +18793,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     /**
      * Overrides superclass implementation.
      *
+     * @override
      * @return {void}
      * @protected
      */
@@ -18251,6 +18807,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Flushes any clients previously enqueued via `_enqueueClient`, causing
      * their `_flushProperties` method to run.
      *
+     * @override
      * @return {void}
      * @protected
      */
@@ -18299,6 +18856,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * `_flushProperties` call on client dom and before any element
      * observers are called.
      *
+     * @override
      * @return {void}
      * @protected
      */
@@ -18313,6 +18871,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Property names must be simple properties, not paths.  Batched
      * path propagation is not supported.
      *
+     * @override
      * @param {Object} props Bag of one or more key-value pairs whose key is
      *   a property and value is the new value to set for that property.
      * @param {boolean=} setReadOnly When true, any private values set in
@@ -18367,6 +18926,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Runs each class of effects for the batch of changed properties in
      * a specific order (compute, propagate, reflect, observe, notify).
      *
+     * @override
      * @param {!Object} currentProps Bag of all current accessor values
      * @param {?Object} changedProps Bag of properties changed since the last
      *   call to `_propertiesChanged`
@@ -18413,6 +18973,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Called to propagate any property changes to stamped template nodes
      * managed by this element.
      *
+     * @override
      * @param {Object} changedProps Bag of changed properties
      * @param {Object} oldProps Bag of previous values for changed properties
      * @param {boolean} hasPaths True with `props` contains one or more paths
@@ -18435,14 +18996,15 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Aliases one data path as another, such that path notifications from one
      * are routed to the other.
      *
+     * @override
      * @param {string | !Array<string|number>} to Target path to link.
      * @param {string | !Array<string|number>} from Source path to link.
      * @return {void}
      * @public
      */
     linkPaths(to, from) {
-      to = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["e" /* normalize */])(to);
-      from = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["e" /* normalize */])(from);
+      to = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["e" /* normalize */])(to);
+      from = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["e" /* normalize */])(from);
       this.__dataLinkedPaths = this.__dataLinkedPaths || {};
       this.__dataLinkedPaths[to] = from;
     }
@@ -18453,12 +19015,13 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Note, the path to unlink should be the target (`to`) used when
      * linking the paths.
      *
+     * @override
      * @param {string | !Array<string|number>} path Target path to unlink.
      * @return {void}
      * @public
      */
     unlinkPaths(path) {
-      path = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["e" /* normalize */])(path);
+      path = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["e" /* normalize */])(path);
       if (this.__dataLinkedPaths) {
         delete this.__dataLinkedPaths[path];
       }
@@ -18474,8 +19037,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      *     this.items.splice(1, 1, {name: 'Sam'});
      *     this.items.push({name: 'Bob'});
      *     this.notifySplices('items', [
-     *       { index: 1, removed: [{name: 'Todd'}], addedCount: 1, object: this.items, type: 'splice' },
-     *       { index: 3, removed: [], addedCount: 1, object: this.items, type: 'splice'}
+     *       { index: 1, removed: [{name: 'Todd'}], addedCount: 1,
+     *         object: this.items, type: 'splice' },
+     *       { index: 3, removed: [], addedCount: 1,
+     *         object: this.items, type: 'splice'}
      *     ]);
      *
      * @param {string} path Path that should be notified.
@@ -18491,12 +19056,14 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      *   Note that splice records _must_ be normalized such that they are
      *   reported in index order (raw results from `Object.observe` are not
      *   ordered and must be normalized/merged before notifying).
+     *
+     * @override
      * @return {void}
      * @public
-    */
+     */
     notifySplices(path, splices) {
       let info = {path: ''};
-      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       notifySplices(this, array, info.path, splices);
     }
 
@@ -18507,6 +19074,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * `undefined` (this method does not throw when dereferencing undefined
      * paths).
      *
+     * @override
      * @param {(string|!Array<(string|number)>)} path Path to the value
      *   to read.  The path may be specified as a string (e.g. `foo.bar.baz`)
      *   or an array of path parts (e.g. `['foo.bar', 'baz']`).  Note that
@@ -18520,7 +19088,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * @public
      */
     get(path, root) {
-      return Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(root || this, path);
+      return Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(root || this, path);
     }
 
     /**
@@ -18531,6 +19099,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * this method does nothing (this method does not throw when
      * dereferencing undefined paths).
      *
+     * @override
      * @param {(string|!Array<(string|number)>)} path Path to the value
      *   to write.  The path may be specified as a string (e.g. `'foo.bar.baz'`)
      *   or an array of path parts (e.g. `['foo.bar', 'baz']`).  Note that
@@ -18543,10 +19112,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      *   When specified, no notification will occur.
      * @return {void}
      * @public
-    */
+     */
     set(path, value, root) {
       if (root) {
-        Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["g" /* set */])(root, path, value);
+        Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["g" /* set */])(root, path, value);
       } else {
         if (!this[TYPES.READ_ONLY] || !this[TYPES.READ_ONLY][/** @type {string} */(path)]) {
           if (this._setPendingPropertyOrPath(path, value, true)) {
@@ -18565,6 +19134,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * This method notifies other paths to the same array that a
      * splice occurred to the array.
      *
+     * @override
      * @param {string | !Array<string|number>} path Path to array.
      * @param {...*} items Items to push onto array
      * @return {number} New length of the array.
@@ -18572,7 +19142,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      */
     push(path, ...items) {
       let info = {path: ''};
-      let array = /** @type {Array}*/(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array}*/(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       let len = array.length;
       let ret = array.push(...items);
       if (items.length) {
@@ -18590,13 +19160,14 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * This method notifies other paths to the same array that a
      * splice occurred to the array.
      *
+     * @override
      * @param {string | !Array<string|number>} path Path to array.
      * @return {*} Item that was removed.
      * @public
      */
     pop(path) {
       let info = {path: ''};
-      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       let hadLength = Boolean(array.length);
       let ret = array.pop();
       if (hadLength) {
@@ -18615,6 +19186,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * This method notifies other paths to the same array that a
      * splice occurred to the array.
      *
+     * @override
      * @param {string | !Array<string|number>} path Path to array.
      * @param {number} start Index from which to start removing/inserting.
      * @param {number=} deleteCount Number of items to remove.
@@ -18624,7 +19196,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      */
     splice(path, start, deleteCount, ...items) {
       let info = {path : ''};
-      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       // Normalize fancy native splice handling of crazy start values
       if (start < 0) {
         start = array.length - Math.floor(-start);
@@ -18670,13 +19242,14 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * This method notifies other paths to the same array that a
      * splice occurred to the array.
      *
+     * @override
      * @param {string | !Array<string|number>} path Path to array.
      * @return {*} Item that was removed.
      * @public
      */
     shift(path) {
       let info = {path: ''};
-      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       let hadLength = Boolean(array.length);
       let ret = array.shift();
       if (hadLength) {
@@ -18694,6 +19267,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * This method notifies other paths to the same array that a
      * splice occurred to the array.
      *
+     * @override
      * @param {string | !Array<string|number>} path Path to array.
      * @param {...*} items Items to insert info array
      * @return {number} New length of the array.
@@ -18701,7 +19275,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      */
     unshift(path, ...items) {
       let info = {path: ''};
-      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info));
+      let array = /** @type {Array} */(Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info));
       let ret = array.unshift(...items);
       if (items.length) {
         notifySplice(this, array, info.path, 0, items.length, []);
@@ -18717,22 +19291,23 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      *     this.item.user.name = 'Bob';
      *     this.notifyPath('item.user.name');
      *
+     * @override
      * @param {string} path Path that should be notified.
      * @param {*=} value Value at the path (optional).
      * @return {void}
      * @public
-    */
+     */
     notifyPath(path, value) {
       /** @type {string} */
       let propPath;
       if (arguments.length == 1) {
         // Get value if not supplied
         let info = {path: ''};
-        value = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(this, path, info);
+        value = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(this, path, info);
         propPath = info.path;
       } else if (Array.isArray(path)) {
         // Normalize path if needed
-        propPath = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["e" /* normalize */])(path);
+        propPath = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["e" /* normalize */])(path);
       } else {
         propPath = /** @type{string} */(path);
       }
@@ -18746,6 +19321,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Property name
      * @param {boolean=} protectedSetter Creates a custom protected setter
      *   when `true`.
@@ -18766,8 +19342,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Property name
-     * @param {string|function(*,*)} method Function or name of observer method to call
+     * @param {string|function(*,*)} method Function or name of observer method
+     *     to call
      * @param {boolean=} dynamicFn Whether the method name should be included as
      *   a dependency to the effect.
      * @return {void}
@@ -18790,6 +19368,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} expression Method expression
      * @param {boolean|Object=} dynamicFn Boolean or object map indicating
      *   whether method names should be included as a dependency to the effect.
@@ -18809,6 +19388,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Property name
      * @return {void}
      * @protected
@@ -18817,7 +19397,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
       this._addPropertyEffect(property, TYPES.NOTIFY, {
         fn: runNotifyEffect,
         info: {
-          eventName: Object(__WEBPACK_IMPORTED_MODULE_3__utils_case_map_js__["a" /* camelToDashCase */])(property) + '-changed',
+          eventName: Object(__WEBPACK_IMPORTED_MODULE_4__utils_case_map_js__["a" /* camelToDashCase */])(property) + '-changed',
           property: property
         }
       });
@@ -18828,9 +19408,11 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Property name
      * @return {void}
      * @protected
+     * @suppress {missingProperties} go/missingfnprops
      */
     _createReflectedProperty(property) {
       let attr = this.constructor.attributeNameForProperty(property);
@@ -18852,6 +19434,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * an instance to add effects at runtime.  See that method for
      * full API docs.
      *
+     * @override
      * @param {string} property Name of computed property to set
      * @param {string} expression Method expression
      * @param {boolean|Object=} dynamicFn Boolean or object map indicating
@@ -18882,37 +19465,23 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      */
     _marshalArgs(args, path, props) {
       const data = this.__data;
-      let values = [];
+      const values = [];
       for (let i=0, l=args.length; i<l; i++) {
-        let arg = args[i];
-        let name = arg.name;
-        let v;
-        if (arg.literal) {
-          v = arg.value;
-        } else {
-          if (arg.structured) {
-            v = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(data, name);
-            // when data is not stored e.g. `splices`
-            if (v === undefined) {
-              v = props[name];
-            }
+        let {name, structured, wildcard, value, literal} = args[i];
+        if (!literal) {
+          if (wildcard) {
+            const matches = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["c" /* isDescendant */])(name, path);
+            const pathValue = getArgValue(data, props, matches ? path : name);
+            value = {
+              path: matches ? path : name,
+              value: pathValue,
+              base: matches ? Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(data, name) : pathValue
+            };
           } else {
-            v = data[name];
+            value = structured ? getArgValue(data, props, name) : data[name];
           }
         }
-        if (arg.wildcard) {
-          // Only send the actual path changed info if the change that
-          // caused the observer to run matched the wildcard
-          let baseChanged = (name.indexOf(path + '.') === 0);
-          let matches = (path.indexOf(name) === 0 && !baseChanged);
-          values[i] = {
-            path: matches ? path : name,
-            value: matches ? props[path] : v,
-            base: v
-          };
-        } else {
-          values[i] = v;
-        }
+        values[i] = value;
       }
       return values;
     }
@@ -19081,6 +19650,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * create and link an instance of the template metadata associated with a
      * particular stamping.
      *
+     * @override
      * @param {!HTMLTemplateElement} template Template containing binding
      *   bindings
      * @param {boolean=} instanceBinding When false (default), performs
@@ -19091,6 +19661,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * @return {!TemplateInfo} Template metadata object; for `runtimeBinding`,
      *   this is an instance of the prototypical template info
      * @protected
+     * @suppress {missingProperties} go/missingfnprops
      */
     _bindTemplate(template, instanceBinding) {
       let templateInfo = this.constructor._parseTemplate(template);
@@ -19189,6 +19760,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Removes and unbinds the nodes previously contained in the provided
      * DocumentFragment returned from `_stampTemplate`.
      *
+     * @override
      * @param {!StampedTemplate} dom DocumentFragment previously returned
      *   from `_stampTemplate` associated with the nodes to be removed
      * @return {void}
@@ -19225,7 +19797,6 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * with one or more metadata objects capturing the source(s) of the
      * binding.
      *
-     * @override
      * @param {Node} node Node to parse
      * @param {TemplateInfo} templateInfo Template metadata for current template
      * @param {NodeInfo} nodeInfo Node metadata for current template node
@@ -19258,7 +19829,6 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * with one or more metadata objects capturing the source(s) of the
      * binding.
      *
-     * @override
      * @param {Element} node Node to parse
      * @param {TemplateInfo} templateInfo Template metadata for current template
      * @param {NodeInfo} nodeInfo Node metadata for current template node
@@ -19287,6 +19857,11 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
         // Initialize attribute bindings with any literal parts
         let literal = literalFromParts(parts);
         if (literal && kind == 'attribute') {
+          // Ensure a ShadyCSS template scoped style is not removed
+          // when a class$ binding's initial literal value is set.
+          if (name == 'class' && node.hasAttribute('class')) {
+            literal += ' ' + node.getAttribute(name);
+          }
           node.setAttribute(name, literal);
         }
         // Clear attribute before removing, since IE won't allow removing
@@ -19303,7 +19878,7 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
         // camel-case: `foo-bar` becomes `fooBar`.
         // Attribute bindings are excepted.
         if (kind === 'property') {
-          name = Object(__WEBPACK_IMPORTED_MODULE_3__utils_case_map_js__["b" /* dashToCamelCase */])(name);
+          name = Object(__WEBPACK_IMPORTED_MODULE_4__utils_case_map_js__["b" /* dashToCamelCase */])(name);
         }
         addBinding(this, templateInfo, nodeInfo, kind, name, parts, literal);
         return true;
@@ -19317,7 +19892,6 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * binding the properties that a nested template depends on to the template
      * as `_host_<property>`.
      *
-     * @override
      * @param {Node} node Node to parse
      * @param {TemplateInfo} templateInfo Template metadata for current template
      * @param {NodeInfo} nodeInfo Node metadata for current template node
@@ -19453,8 +20027,8 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
      * Called to evaluate a previously parsed binding part based on a set of
      * one or more changed dependencies.
      *
-     * @param {this} inst Element that should be used as scope for
-     *   binding dependencies
+     * @param {!Polymer_PropertyEffects} inst Element that should be used as
+     *     scope for binding dependencies
      * @param {BindingPart} part Binding part metadata
      * @param {string} path Property/path that triggered this effect
      * @param {Object} props Bag of current property changes
@@ -19468,10 +20042,10 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
       if (part.signature) {
         value = runMethodEffect(inst, path, props, oldProps, part.signature);
       } else if (path != part.source) {
-        value = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(inst, part.source);
+        value = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(inst, part.source);
       } else {
-        if (hasPaths && Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["d" /* isPath */])(path)) {
-          value = Object(__WEBPACK_IMPORTED_MODULE_2__utils_path_js__["a" /* get */])(inst, path);
+        if (hasPaths && Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["d" /* isPath */])(path)) {
+          value = Object(__WEBPACK_IMPORTED_MODULE_3__utils_path_js__["a" /* get */])(inst, path);
         } else {
           value = inst.__data[path];
         }
@@ -19483,9 +20057,6 @@ const PropertyEffects = Object(__WEBPACK_IMPORTED_MODULE_1__utils_mixin_js__["a"
     }
 
   }
-
-  // make a typing for closure :P
-  PropertyEffectsType = PropertyEffects;
 
   return PropertyEffects;
 });

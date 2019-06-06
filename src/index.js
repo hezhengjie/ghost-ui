@@ -3,11 +3,13 @@ import '@webcomponents/custom-elements'
 import '@webcomponents/custom-elements/src/native-shim'
 import {
   // basic
-  Button
+  Button,
+  Loading
 } from './module'
 const components = [
   // basic
-  Button
+  Button,
+  Loading
 ]
 
 const Ghost = {

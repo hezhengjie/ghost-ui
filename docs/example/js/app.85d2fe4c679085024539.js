@@ -392,7 +392,7 @@ const components = [
 
 const Ghost = {
   /* eslint-disable no-undef */
-  version: "0.0.1"
+  version: "0.0.1-beta.1"
 }
 
 components.forEach((Component) => {
